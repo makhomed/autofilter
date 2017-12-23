@@ -94,7 +94,7 @@ nginx configuration in context http:
 
 .. code-block:: none
 
-    $bot {
+    geo $bot {
         default 0;
         include /opt/autofilter/var/bot.conf;
     }
