@@ -284,7 +284,7 @@ class AutoFilter(object):
             else:
                 print 'unmatched nginx access log line:', line
 
-    def is_ip_whitelisted_search_engine(self, domain):
+    def is_whitelisted_search_engine(self, domain):
         # https://support.google.com/webmasters/answer/80553?hl=en
         if domain.endswith(".googlebot.com.") or domain.endswith(".google.com."):
             return True
@@ -306,7 +306,7 @@ class AutoFilter(object):
         if load > limit:
             domain, err = self.resolver.ip_to_domain(ip)
             if domain:
-                if self.is_ip_whitelisted_search_engine(domain):
+                if self.is_whitelisted_search_engine(domain):
                     return False, domain, err
                 else:
                     return True, domain, err
