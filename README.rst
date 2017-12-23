@@ -119,7 +119,7 @@ nginx configuration in context server:
 
 .. code-block:: none
 
-    if ( $bot ) { return 403; }
+    if ( $bot ) { return 429; }
 
 Command-line usage
 ------------------
