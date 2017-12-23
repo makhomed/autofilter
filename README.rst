@@ -90,6 +90,12 @@ By default ``block ALL 24h`` if other value not specified in config.
 nginx configuration
 ~~~~~~~~~~~~~~~~~~~
 
+nginx global configuration context:
+
+.. code-block:: none
+
+    worker_shutdown_timeout 60s;
+
 nginx configuration in context http:
 
 .. code-block:: none
