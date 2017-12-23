@@ -174,7 +174,7 @@ class AutoFilter(object):
         self.line_re = re.compile(self.line_regexp)
         self.inode = None
         self.log_file = None
-        self.static = set([ '.css', '.map', '.js', '.json', '.xml', '.txt', '.pdf',
+        self.static = set([ '.css', '.map', '.js', '.json', '.xml', '.csv', '.txt', '.pdf',
                             '.jpg', '.jpeg', '.png', '.gif', '.svg', '.bmp', '.ico',
                             '.eot', '.ttf', '.woff', '.woff2', '.mp4', '.webm',
                         ])
