@@ -176,7 +176,8 @@ class AutoFilter(object):
         self.log_file = None
         self.static = set([ '.css', '.map', '.js', '.json', '.xml', '.csv', '.txt', '.pdf',
                             '.jpg', '.jpeg', '.png', '.gif', '.svg', '.bmp', '.ico',
-                            '.eot', '.ttf', '.woff', '.woff2', '.mp4', '.webm',
+                            '.eot', '.otf', '.ttf', '.woff', '.woff2',
+                            '.mp4', '.webm',
                         ])
         self.clear_batch()
 
