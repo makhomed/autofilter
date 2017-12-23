@@ -1,0 +1,524 @@
+#!/usr/bin/python -u
+
+import argparse
+import datetime
+import codecs
+import re
+import os
+import os.path
+import signal
+import stat
+import sys
+import time
+import uuid
+
+import dns.resolver
+import dns.reversename
+import dns.exception
+
+"""
+
+nginx http config:
+
+    geo $bot {
+        default 0;
+        include /opt/autofilter/var/bot.conf;
+    }
+
+    map $bot $loggable {
+        0 1;
+        1 0;
+    }
+
+    log_format frontend '$time_iso8601\t$http_cf_ipcountry\t$remote_addr\t$scheme\t$host\t$request_method\t'
+                      '"$request_uri"\t$status\t$body_bytes_sent\t"$http_referer"\t"$http_user_agent"\t$http_cf_ray';
+
+    access_log /var/log/nginx/access.log frontend if=$loggable;
+
+nginx server config:
+
+    if ( $bot ) { return 403; }
+
+example access.log line:
+
+2017-12-21T21:38:06+02:00  XX  11.22.33.44  https   example.com    GET   "/image.jpg"    206   865055  "https://example.com/1120/"   "Mozilla/5.0 ... Chrome/61.0.3163.98 ..."  3d0bee50fe892ac7-WAW
+
+software required for work:
+
+# yum install unbound
+# systemctl enable unbound
+# systemctl start unbound
+     interface: 127.0.0.1
+     do-ip6: no
+
+# pip install dnspython
+
+"""
+
+DEFAULT_LIMIT = 600
+DEFAULT_BLOCK = '24h'
+
+class Config(object):
+    def __init__(self):
+        self.limit = dict()
+        self.block = dict()
+        if not os.path.isfile('/opt/autofilter/autofilter.conf'):
+            sys.exit("configuration file '/opt/autofilter/autofilter.conf' not exists")
+        with codecs.open('/opt/autofilter/autofilter.conf', 'rb', encoding='UTF-8') as config_file:
+            lines = config_file.read().split('\n')
+        for line in lines:
+            comment_start = line.find('#')
+            if comment_start > -1:
+                line = line[:comment_start]
+            line = line.strip()
+            if not line:
+                continue
+            line = line.replace("\t", "\x20")
+            line = line.lower()
+            name, value = line.split(None, 1)
+            if name == 'limit':
+                entity, limit = value.split(None, 1)
+                if ':' not in entity:
+                    entity = entity.upper()
+                if entity in self.limit:
+                    sys.exit("limit for %s already defined in config" % entity)
+                if limit == 'none':
+                    limit = 2**64 - 1
+                else:
+                    limit = int(limit)
+                if limit < 60:
+                    sys.exit("invalid limit value %d for entity %s" % (limit, entity))
+                self.limit[entity] = limit
+            elif name == 'block':
+                entity, block = value.split(None, 1)
+                if ':' not in entity:
+                    entity = entity.upper()
+                if entity in self.block:
+                    sys.exit("limit for %s already defined in config" % entity)
+                block = self.parse_time(block)
+                self.block[entity] = block
+            else:
+                sys.exit("invalid config directive '%s'" % name)
+        if 'ALL' not in self.limit:
+            self.limit['ALL'] = DEFAULT_LIMIT
+        if 'ALL' not in self.block:
+            self.block['ALL'] = self.parse_time(DEFAULT_BLOCK)
+
+    def parse_time(self, block):
+        if not block.endswith('h') and not block.endswith('d'):
+            sys.exit("invalid time %s" % block)
+        num = int(block[:-1])
+        if num < 1:
+            sys.exit("invalid time %s" % block)
+        if block.endswith('h'):
+            return num * 60 * 60
+        else:
+            return num * 24 * 60 * 60
+
+class Resolver(object):
+    def __init__(self):
+        self.resolver = dns.resolver.Resolver(configure=False)
+        self.resolver.nameservers = ['127.0.0.1']
+
+    def ip_to_domain(self, ip):
+        try:
+            reverse_addr = dns.reversename.from_address(ip)
+            answer = self.resolver.query(reverse_addr, "PTR")
+            name = str(answer[0])
+            if ':' in ip:
+                query_type = "AAAA"
+            else:
+                query_type = "A"
+            answer = self.resolver.query(name, query_type)
+            name_ip = str(answer[0])
+            if name_ip == ip:
+                return name, None
+            else:
+                return None, "DNS record not match: ip: %s reverse_name %s reverse_name_ip: %s" % (ip, name, name_ip)
+        except dns.exception.Timeout as ex:
+            return None, str(ex)
+        except dns.resolver.NXDOMAIN as ex:
+            return None, str(ex)
+        except dns.resolver.YXDOMAIN as ex:
+            return None, str(ex)
+        except dns.resolver.NoAnswer as ex:
+            return None, str(ex)
+        except dns.resolver.NoNameservers as ex:
+            return None, str(ex)
+
+class AutoFilter(object):
+    def __init__(self, args):
+        self.config = Config()
+        self.resolver = Resolver()
+        self.mode = args.mode
+        if self.mode == "daemon":
+            self.run = self.daemon_run
+        elif self.mode == "top":
+            self.run = self.top_run
+        elif self.mode == "ext":
+            self.run = self.ext_run
+        elif self.mode == "errors":
+            self.run = self.errors_run
+        else:
+            sys.exit("unknown mode %s" % self.mode)
+        if not os.path.isdir('/opt/autofilter/var'):
+            os.mkdir('/opt/autofilter/var')
+        self.set_signal_handler()
+        self.nginx_reload_interval = 60
+        self.nginx_pid_filename = '/var/run/nginx.pid'
+        self.log_filename = '/var/log/nginx/access.log'
+        self.old_log_filename = '/var/log/nginx/access.log.1'
+        self.bot_conf_filename = '/opt/autofilter/var/bot.conf'
+        self.line_regexp = ( r'^(?P<time_iso8601>\S+)\t(?P<country>..)\t(?P<ip>\S+)\t(?P<scheme>\S+)\t(?P<host>\S+)\t(?P<request_method>\S+)\t' +
+                             r'"(?P<request_uri>.*?)"\t(?P<status>\S+)\t(?P<body_bytes_sent>\S+)\t"(?P<referer>.*?)"\t"(?P<user_agent>.*?)".*$' )
+        self.line_re = re.compile(self.line_regexp)
+        self.inode = None
+        self.log_file = None
+        self.static = set([ '.css', '.map', '.js', '.json', '.xml', '.jpg', '.jpeg', '.png', '.gif', '.bmp', '.ico', '.eot', '.ttf', '.woff', '.woff2', '.mp4', '.txt', '.svg', '.pdf' ])
+        self.clear_batch()
+
+    def check_exit(self):
+        if self.exit:
+            sys.exit(0)
+
+    def exit_gracefully(self, dummy_signum, dummy_frame):
+        self.exit = True
+
+    def set_signal_handler(self):
+        self.exit = False
+        signal.signal(signal.SIGINT, self.exit_gracefully)
+        signal.signal(signal.SIGTERM, self.exit_gracefully)
+
+    def open_log(self):
+        if not os.path.isfile(self.log_filename):
+            sys.exit("log file %s not exists, can't run" % self.log_filename)
+        stat = os.stat(self.log_filename)
+        self.log_file = codecs.open(self.log_filename, 'rb', encoding='UTF-8')
+        self.inode = stat.st_ino
+
+    def send_nginx_signal(self, sig):
+        if os.path.exists(self.nginx_pid_filename):
+            with open(self.nginx_pid_filename) as pid_file:
+                pid = int(pid_file.readline())
+            if pid > 0:
+                os.kill(pid, sig)
+
+    def reopen_log(self):
+        stat = os.stat(self.log_filename)
+        if stat.st_size > 1024 * 1024 * 1024:
+            os.rename(self.log_filename, self.old_log_filename)
+            with open(self.log_filename, 'ab'):
+                os.utime(self.log_filename, None)
+            os.chown(self.log_filename, "nginx", "adm")
+            os.chmod(self.log_filename, 0640)
+            self.send_nginx_signal(signal.SIGUSR1)
+            time.sleep(1)
+
+        stat = os.stat(self.log_filename)
+        if self.inode != stat.st_ino:
+            if self.log_file:
+                self.log_file.close()
+            self.log_file = codecs.open(self.log_filename, 'rb', encoding='UTF-8')
+            self.inode = stat.st_ino
+
+    def lines_once(self):
+        self.open_log()
+        while True:
+            line = self.log_file.readline()
+            self.check_exit()
+            if line:
+                yield line
+            else:
+                break
+
+    def lines_tail(self):
+        self.open_log()
+        while not self.exit:
+            while True:
+                line = self.log_file.readline()
+                self.check_exit()
+                if line:
+                    yield line
+                else:
+                    break
+            self.reopen_log()
+            time.sleep(1)
+        sys.exit(0)
+
+    def process_line(self, line):
+            line = line.strip()
+            match = self.line_re.match(line)
+            if match:
+                country = match.group('country')
+                ip = match.group('ip')
+                request_uri = match.group('request_uri')
+                status = match.group('status')
+                request_method = match.group('request_method')
+                pos = request_uri.find('?')
+                if pos == -1:
+                    uri = request_uri.lower()
+                    is_args = False
+                else:
+                    uri = request_uri[:pos].lower()
+                    is_args = True
+                pos = uri.rfind('.')
+                if pos == -1:
+                    ext = None
+                else:
+                    ext = uri[pos:]
+                if ext in self.static:
+                    weight = 1
+                else:
+                    if status.startswith('3'):
+                        weight = 1
+                    else:
+                        if request_method == 'POST':
+                            weight = 30
+                        elif is_args:
+                            weight = 20
+                        else:
+                            weight = 10
+                old_weight = self.load.get(ip, 0)
+                self.load[ip] = old_weight + weight
+                self.country[ip] = country
+            else:
+                print 'unmatched nginx access log line:', line
+
+    def is_ip_whitelisted_search_engine(self, domain):
+        # https://support.google.com/webmasters/answer/80553?hl=en
+        if domain.endswith(".googlebot.com.") or domain.endswith(".google.com."):
+            return True
+        # https://yandex.com/support/webmaster/robot-workings/check-yandex-robots.xml
+        elif domain.endswith(".yandex.com.") or domain.endswith(".yandex.net.") or domain.endswith(".yandex.ru."):
+            return True
+        # https://www.bing.com/webmaster/help/how-to-verify-bingbot-3905dc26
+        elif domain.endswith(".search.msn.com."):
+            return True
+        else:
+            return False
+
+    def is_ip_blocked(self, ip, country, load):
+        limit = self.config.limit.get(ip)
+        if limit is None:
+            limit = self.config.limit.get(country)
+        if limit is None:
+            limit = self.config.limit['ALL']
+        if load > limit:
+            domain, err = self.resolver.ip_to_domain(ip)
+            if domain:
+                if self.is_ip_whitelisted_search_engine(domain):
+                    return False, domain, err
+                else:
+                    return True, domain, err
+            else:
+                return True, domain, err
+        else:
+            return False, None, None
+
+    def ip_block_until(self, ip, country):
+        block = self.config.block.get(ip)
+        if block is None:
+            block = self.config.block.get(country)
+        if block is None:
+            block = self.config.block['ALL']
+        now = time.time()
+        return now + block
+
+    def clear_batch(self):
+        self.load = dict()
+        self.country = dict()
+
+###############################################################################################################################################################
+
+    def write_file(self, filename, content):
+        tmp_filename = filename + '.tmp.' + uuid.uuid4().hex + '.tmp'
+        with open(tmp_filename, "w") as tmp_file:
+            tmp_file.write(content)
+        os.rename(tmp_filename, filename)
+
+    def write_bot_conf(self, bot):
+        bot_list = list()
+        for ip in bot.keys():
+            block_until, country, load, text = bot[ip]
+            record = load, ip, country, block_until, text
+            bot_list.append(record)
+        bot_list.sort(reverse=True)
+        out = list()
+        for load, ip, country, block_until, text in bot_list:
+            block_until = datetime.datetime.fromtimestamp(block_until)
+            block_until = datetime.datetime(block_until.year, block_until.month, block_until.day, block_until.hour, block_until.minute, block_until.second)
+            block_until = block_until.isoformat()
+            line = "%45s 1; # %s %10d %s %s" % (ip, country, load, block_until, text)
+            out.append(line)
+        if out:
+            content = "\n".join(out)
+            self.write_file(self.bot_conf_filename, content)
+
+    def read_bot_conf(self):
+        bot = dict()
+        if os.path.isfile(self.bot_conf_filename):
+            with open(self.bot_conf_filename) as bot_conf_file:
+                for line in bot_conf_file:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    ip, dummy_one, dummy_comment, country, load, block_until, text = line.split(None, 6)
+                    load = int(load)
+                    block_until = datetime.datetime.strptime(block_until, "%Y-%m-%dT%H:%M:%S")
+                    block_until = int(time.mktime(block_until.timetuple()))
+                    bot[ip] = block_until, country, load, text
+        return bot
+
+    def delete_expired_records(self, bot):
+        now = time.time()
+        for ip in bot.keys():
+            block_until, country, load, text = bot[ip]
+            if block_until < now:
+                del bot[ip]
+        return bot
+
+    def reload_nginx(self, bot):
+        now = time.time()
+        botnet = set(bot.keys())
+        if now - self.last_nginx_reload > self.nginx_reload_interval:
+            if botnet != self.botnet:
+                self.send_nginx_signal(signal.SIGHUP)
+                self.last_nginx_reload = now
+                self.botnet = botnet
+
+    def daemon_process_batch(self):
+        bot = self.read_bot_conf()
+        bot = self.delete_expired_records(bot)
+        for ip, load in self.load.iteritems():
+            country = self.country[ip]
+            blocked, domain, err = self.is_ip_blocked(ip, country, load)
+            if blocked:
+                block_until = self.ip_block_until(ip, country)
+                if domain is None:
+                    text = "error: %s" % err
+                else:
+                    text = domain
+                bot[ip] = block_until, country, load, text
+        self.clear_batch()
+        self.write_bot_conf(bot)
+        self.reload_nginx(bot)
+
+    def daemon_run(self):
+        self.prefix = None
+        self.botnet = set()
+        self.last_nginx_reload = 0
+        for line in self.lines_tail():
+            time_iso8601, dummy_rest_of_line = line.split('\t', 1)
+            prefix = time_iso8601[:16]
+            if self.prefix != prefix:
+                self.daemon_process_batch()
+                self.prefix = prefix
+            self.process_line(line)
+
+###############################################################################################################################################################
+
+    def top_process_batch(self):
+        for ip, load in self.load.iteritems():
+            top_load = self.top_load.get(ip, 0)
+            if load > top_load:
+                self.top_load[ip] = load
+                self.top_country[ip] = self.country[ip]
+                self.top_prefix[ip] = self.prefix
+        self.clear_batch()
+
+    def top_run(self):
+        self.prefix = None
+        self.top_load = dict()
+        self.top_country = dict()
+        self.top_prefix = dict()
+        for line in self.lines_once():
+            self.check_exit()
+            time_iso8601, dummy_rest_of_line = line.split('\t', 1)
+            prefix = time_iso8601[:16]
+            if self.prefix != prefix:
+                self.top_process_batch()
+                self.prefix = prefix
+            self.process_line(line)
+        ips = self.top_load.keys()
+        ips.sort(reverse=True, key=lambda x: self.top_load[x])
+        for ip in ips:
+            self.check_exit()
+            load = self.top_load[ip]
+            country = self.top_country[ip]
+            blocked, domain, err = self.is_ip_blocked(ip, country, load)
+            if blocked:
+                status = "BLOCKED"
+            else:
+                status = "-------"
+            if domain:
+                text = domain
+            elif err:
+                text = "error: %s" % err
+            else:
+                text = ""
+            if blocked or load > self.config.limit['ALL']:
+                print "%s %8d %s %15s %s %s" % (self.top_prefix[ip], self.top_load[ip], self.top_country[ip], ip, status, text)
+
+###############################################################################################################################################################
+
+    def ext_run(self):
+        for line in self.lines_once():
+            line = line.strip()
+            match = self.line_re.match(line)
+            if match:
+                scheme = match.group('scheme')
+                host = match.group('host')
+                request_uri = match.group('request_uri')
+                status = match.group('status')
+                request_method = match.group('request_method')
+                body_bytes_sent = match.group('body_bytes_sent')
+                referer = match.group('referer')
+                pos = request_uri.find('?')
+                if pos == -1:
+                    uri = request_uri.lower()
+                    is_args = False
+                else:
+                    uri = request_uri[:pos].lower()
+                    is_args = True
+                pos = uri.rfind('.')
+                if pos == -1:
+                    ext = None
+                else:
+                    ext = uri[pos:]
+                if ext is None or ext in self.static or uri.endswith('/') or ext in ['.php', '.ua', '.com', '.net', '.org', '.html', '.htm']:
+                    continue
+                else:
+                    print ext
+                    print status, request_method, scheme + '://' + host + request_uri, body_bytes_sent
+                    print referer
+                    print
+            else:
+                print 'unmatched nginx access log line:', line
+
+###############################################################################################################################################################
+
+    def errors_run(self):
+        for line in self.lines_once():
+            line = line.strip()
+            match = self.line_re.match(line)
+            if match:
+                status = match.group('status')
+                if status.startswith("5"):
+                    print line
+            else:
+                print 'unmatched nginx access log line:', line
+
+###############################################################################################################################################################
+
+def main():
+    try:
+        parser = argparse.ArgumentParser(prog="autofilter")
+        parser.add_argument("mode", choices=["daemon", "top", "ext", "errors"], help="mode")
+        args = parser.parse_args()
+        AutoFilter(args).run()
+    except IOError: # [Errno 32] Broken pipe
+        pass
+    sys.exit(0)
+
+if __name__=='__main__':
+    main()
