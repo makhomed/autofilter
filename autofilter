@@ -41,7 +41,7 @@ nginx server config:
 
 example access.log line:
 
-2017-12-21T21:38:06+02:00  XX  11.22.33.44  https   example.com    GET   "/image.jpg"    206   865055  "https://example.com/1120/"   "Mozilla/5.0 ... Chrome/61.0.3163.98 ..."  3d0bee50fe892ac7-WAW
+2017-12-21T21:38:06+02:00  XX     11.22.33.44  https   example.com    GET   "/image.jpg"    206   865055  "https://example.com/1120/"   "Mozilla/5.0 ... Chrome/61.0.3163.98 ..."  3d0bee50fe892ac7-WAW
 
 software required for work:
 
@@ -169,12 +169,15 @@ class AutoFilter(object):
         self.log_filename = '/var/log/nginx/access.log'
         self.old_log_filename = '/var/log/nginx/access.log.1'
         self.bot_conf_filename = '/opt/autofilter/var/bot.conf'
-        self.line_regexp = ( r'^(?P<time_iso8601>\S+)\t(?P<country>..)\t(?P<ip>\S+)\t(?P<scheme>\S+)\t(?P<host>\S+)\t(?P<request_method>\S+)\t' +
+        self.line_regexp = ( r'^(?P<time_iso8601>\S+)\t(?P<country>..)\t(?P<ip>\S+)\t(?P<scheme>\S+)\t(?P<host>.*?)\t(?P<request_method>\S+)\t' +
                              r'"(?P<request_uri>.*?)"\t(?P<status>\S+)\t(?P<body_bytes_sent>\S+)\t"(?P<referer>.*?)"\t"(?P<user_agent>.*?)".*$' )
         self.line_re = re.compile(self.line_regexp)
         self.inode = None
         self.log_file = None
-        self.static = set([ '.css', '.map', '.js', '.json', '.xml', '.jpg', '.jpeg', '.png', '.gif', '.bmp', '.ico', '.eot', '.ttf', '.woff', '.woff2', '.mp4', '.txt', '.svg', '.pdf' ])
+        self.static = set([ '.css', '.map', '.js', '.json', '.xml', '.txt', '.pdf',
+                            '.jpg', '.jpeg', '.png', '.gif', '.svg', '.bmp', '.ico',
+                            '.eot', '.ttf', '.woff', '.woff2', '.mp4', '.webm',
+                        ])
         self.clear_batch()
 
     def check_exit(self):
