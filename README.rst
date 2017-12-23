@@ -82,8 +82,8 @@ By default ``limit ALL 600`` if other value not specified in config.
 ``<entity>`` can be ``ALL``, or country code, for example, ``UA`` or ``RU`` or ``CN``.
 Also ``<entity>`` can be IP address, ipv4 or ipv6.
 
-``<time>`` is block time of block in hours or in days, suffix ``h`` or ``d`` is required.
-For example, ``24h`` or ``3d``.
+``<time>`` is block time in hours or in days, suffix ``h`` or ``d`` is required.
+For example: ``24h`` or ``3d``.
 
 By default ``block ALL 24h`` if other value not specified in config.
 
@@ -148,7 +148,8 @@ After it create systemd service, for example, in file ``/etc/systemd/system/auto
 
     [Install]
     WantedBy=multi-user.target
-    After this you need to start service:
+
+After this you need to start service:
 
   - ``systemctl daemon-reload``
   - ``systemctl enable autofilter``
