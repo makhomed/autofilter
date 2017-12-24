@@ -174,10 +174,13 @@ class AutoFilter(object):
         self.line_re = re.compile(self.line_regexp)
         self.inode = None
         self.log_file = None
-        self.static = set([ '.css', '.map', '.js', '.json', '.xml', '.csv', '.txt', '.pdf', '.doc', '.docx',
-                            '.jpg', '.jpeg', '.png', '.gif', '.svg', '.bmp', '.ico', '.webp',
+        self.static = set([ '.css', '.map', '.js', '.json', '.xml', '.csv', '.txt', '.pdf',
+                            '.rar', '.zip', '.arj', '.7z', '.gz', '.bz2', '.xz', '.iso', '.rpm', '.swf',
+                            '.rtf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx', '.odt', '.ods', '.odp', '.odg',
+                            '.jpg', '.jpeg', '.tif', '.tiff', '.png', '.gif', '.svg', '.bmp', '.ico', '.webp',
                             '.eot', '.otf', '.ttf', '.woff', '.woff2',
-                            '.mp4', '.webm',
+                            '.mp3', '.ogg', '.m4a', '.mid', '.midi', '.ra',
+                            '.mp4', '.webm', '.3gpp', '.3gp', '.ts', '.mpeg', '.mpg', '.mov', '.flv', '.m4v', '.mng', '.asx', '.asf', '.wmv', '.avi',
                         ])
         self.clear_batch()
 
