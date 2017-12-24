@@ -258,6 +258,7 @@ class AutoFilter(object):
                 request_uri = match.group('request_uri')
                 status = match.group('status')
                 request_method = match.group('request_method')
+
                 pos = request_uri.find('?')
                 if pos == -1:
                     uri = request_uri.lower()
@@ -265,23 +266,24 @@ class AutoFilter(object):
                 else:
                     uri = request_uri[:pos].lower()
                     is_args = True
+
                 pos = uri.rfind('.')
                 if pos == -1:
                     ext = None
                 else:
                     ext = uri[pos:]
+
                 if ext in self.static:
                     weight = 1
+                elif status.startswith('3'):
+                    weight = 1
+                elif request_method == 'POST':
+                    weight = 30
+                elif is_args:
+                    weight = 20
                 else:
-                    if status.startswith('3'):
-                        weight = 1
-                    else:
-                        if request_method == 'POST':
-                            weight = 30
-                        elif is_args:
-                            weight = 20
-                        else:
-                            weight = 10
+                    weight = 10
+
                 old_weight = self.load.get(ip, 0)
                 self.load[ip] = old_weight + weight
                 self.country[ip] = country
