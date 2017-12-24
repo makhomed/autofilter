@@ -157,6 +157,8 @@ class AutoFilter(object):
             self.run = self.top_run
         elif self.mode == "ext":
             self.run = self.ext_run
+        elif self.mode == "bot":
+            self.run = self.bot_run
         elif self.mode == "errors":
             self.run = self.errors_run
         else:
@@ -359,9 +361,8 @@ class AutoFilter(object):
             block_until = block_until.isoformat()
             line = "%45s 1; # %s %10d %s %s" % (ip, country, load, block_until, text)
             out.append(line)
-        if out:
-            content = "\n".join(out)
-            self.write_file(self.bot_conf_filename, content)
+        content = "\n".join(out)
+        self.write_file(self.bot_conf_filename, content)
 
     def read_bot_conf(self):
         bot = dict()
@@ -408,9 +409,9 @@ class AutoFilter(object):
                 else:
                     text = domain
                 bot[ip] = block_until, country, load, text
-        self.clear_batch()
         self.write_bot_conf(bot)
         self.reload_nginx(bot)
+        self.clear_batch()
 
     def daemon_run(self):
         self.prefix = None
@@ -517,6 +518,15 @@ class AutoFilter(object):
 
 ###############################################################################################################################################################
 
+    def bot_run(self):
+        content = ""
+        if os.path.isfile(self.bot_conf_filename):
+            with open(self.bot_conf_filename) as bot_conf_file:
+                content = bot_conf_file.read()
+        print content
+
+###############################################################################################################################################################
+
     def errors_run(self):
         for line in self.lines_once():
             line = line.strip()
@@ -533,7 +543,7 @@ class AutoFilter(object):
 def main():
     try:
         parser = argparse.ArgumentParser(prog="autofilter")
-        parser.add_argument("mode", choices=["daemon", "top", "ext", "errors"], help="mode")
+        parser.add_argument("mode", choices=["daemon", "top", "ext", "bot", "errors"], help="mode")
         args = parser.parse_args()
         AutoFilter(args).run()
     except IOError: # [Errno 32] Broken pipe
