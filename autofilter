@@ -174,8 +174,8 @@ class AutoFilter(object):
         self.line_re = re.compile(self.line_regexp)
         self.inode = None
         self.log_file = None
-        self.static = set([ '.css', '.map', '.js', '.json', '.xml', '.csv', '.txt', '.pdf',
-                            '.jpg', '.jpeg', '.png', '.gif', '.svg', '.bmp', '.ico',
+        self.static = set([ '.css', '.map', '.js', '.json', '.xml', '.csv', '.txt', '.pdf', '.doc', '.docx',
+                            '.jpg', '.jpeg', '.png', '.gif', '.svg', '.bmp', '.ico', '.webp',
                             '.eot', '.otf', '.ttf', '.woff', '.woff2',
                             '.mp4', '.webm',
                         ])
@@ -468,6 +468,7 @@ class AutoFilter(object):
 ###############################################################################################################################################################
 
     def ext_run(self):
+        ext_info = dict()
         for line in self.lines_once():
             line = line.strip()
             match = self.line_re.match(line)
@@ -494,12 +495,22 @@ class AutoFilter(object):
                 if ext is None or ext in self.static or uri.endswith('/') or ext in ['.php', '.ua', '.com', '.net', '.org', '.html', '.htm']:
                     continue
                 else:
-                    print ext
-                    print status, request_method, scheme + '://' + host + request_uri, body_bytes_sent
-                    print referer
-                    print
+                    info = ext_info.get(ext)
+                    if info is None:
+                        count = 1
+                    else:
+                        count = info[0] + 1
+                    ext_info[ext] = count, status, request_method, scheme, host, request_uri, body_bytes_sent, referer
             else:
                 print 'unmatched nginx access log line:', line
+        keys = ext_info.keys()
+        keys.sort(reverse=True, key=lambda x: ext_info[x][0])
+        for ext in keys:
+            count, status, request_method, scheme, host, request_uri, body_bytes_sent, referer = ext_info[ext]
+            print "%s (%d)" % (ext, count)
+            print status, request_method, scheme + '://' + host + request_uri, body_bytes_sent
+            print referer
+            print
 
 ###############################################################################################################################################################
 
