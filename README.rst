@@ -124,7 +124,7 @@ nginx configuration in context server:
 Command-line usage
 ------------------
 
-``autofilter`` can be started in differend modes: ``daemon``, ``top``, ``ext``, ``errors``.
+``autofilter`` can be started in differend modes: ``daemon``, ``top``, ``ext``, ``bot``, ``errors``.
 
 ``daemon`` mode intended for using ``autofilter`` as systemd service, in this mode ``autofilter``
 continuously monitor nginx access.log file and automatically block detected bots.
@@ -132,6 +132,8 @@ continuously monitor nginx access.log file and automatically block detected bots
 ``top`` mode display top load generated from users by ip address, and display which ip will be blocked in ``daemon`` mode.
 
 ``ext`` mode display all unknown non-static extensions occurred in access.log file.
+
+``bot`` mode display all blocked bots.
 
 ``errors`` mode display all ``5xx`` errors occurred in access.log file.
 
