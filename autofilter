@@ -519,11 +519,12 @@ class AutoFilter(object):
 ###############################################################################################################################################################
 
     def bot_run(self):
-        content = ""
+        content = None
         if os.path.isfile(self.bot_conf_filename):
             with open(self.bot_conf_filename) as bot_conf_file:
                 content = bot_conf_file.read()
-        print content
+        if content:
+            print content
 
 ###############################################################################################################################################################
 
