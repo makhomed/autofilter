@@ -20,6 +20,7 @@ Also you need to install unbound and dnspython:
         do-ip6: no
 
     # pip install dnspython
+    # pip install netaddr
 
 Upgrade
 -------
@@ -46,7 +47,7 @@ Configuration file has only two directives: ``limit`` and ``block``.
 ``limit`` directive has syntax: ``limit <entity> <threshold>``.
 
 ``<entity>`` can be ``ALL``, or country code, for example, ``UA`` or ``RU`` or ``CN``.
-Also ``<entity>`` can be IP address, ipv4 or ipv6.
+Also ``<entity>`` can be IP address, ipv4 or ipv6 or IP network in CIDR notation.
 
 ``<threshold>`` is load threshold after which specific ip address will be blocked.
 ``<threshold>`` is integer number or special value ``none``.

@@ -15,6 +15,7 @@ import uuid
 import dns.resolver
 import dns.reversename
 import dns.exception
+import netaddr
 
 """
 
@@ -52,6 +53,7 @@ software required for work:
      do-ip6: no
 
 # pip install dnspython
+# pip install netaddr
 
 """
 
@@ -61,6 +63,7 @@ DEFAULT_BLOCK = '24h'
 class Config(object):
     def __init__(self):
         self.limit = dict()
+        self.limit_cidr = list()
         self.block = dict()
         if not os.path.isfile('/opt/autofilter/autofilter.conf'):
             sys.exit("configuration file '/opt/autofilter/autofilter.conf' not exists")
@@ -103,6 +106,11 @@ class Config(object):
             self.limit['ALL'] = DEFAULT_LIMIT
         if 'ALL' not in self.block:
             self.block['ALL'] = self.parse_time(DEFAULT_BLOCK)
+        for addr in self.limit:
+            if '/' in addr:
+                self.limit_cidr.append(addr)
+        self.limit_cidr.sort(key=lambda x: int(x.split('/')[1]), reverse=True)
+
 
     def parse_time(self, block):
         if not block.endswith('h') and not block.endswith('d'):
@@ -308,8 +316,15 @@ class AutoFilter(object):
         else:
             return False
 
+    def get_ip_limit_by_cidr(self, ip):
+        for cidr in self.config.limit_cidr:
+            if netaddr.IPAddress(ip) in netaddr.IPNetwork(cidr):
+                return self.config.limit.get(cidr)
+
     def is_ip_blocked(self, ip, country, load):
         limit = self.config.limit.get(ip)
+        if limit is None:
+            limit = self.get_ip_limit_by_cidr(ip)
         if limit is None:
             limit = self.config.limit.get(country)
         if limit is None:
