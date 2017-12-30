@@ -169,6 +169,10 @@ class AutoFilter(object):
             self.run = self.bot_run
         elif self.mode == "errors":
             self.run = self.errors_run
+        elif self.mode == "size":
+            self.run = self.size_run
+        elif self.mode == "size-top":
+            self.run = self.size_top_run
         else:
             sys.exit("unknown mode %s" % self.mode)
         if not os.path.isdir('/opt/autofilter/var'):
@@ -556,10 +560,119 @@ class AutoFilter(object):
 
 ###############################################################################################################################################################
 
+    def round_up(self, num_to_round, multiple):
+        if multiple == 0:
+            return num_to_round
+        remainder = num_to_round % multiple
+        if remainder == 0:
+            return num_to_round
+        return num_to_round + multiple - remainder
+
+    def size_run(self):
+        count = dict()
+        for line in self.lines_once():
+            line = line.strip()
+            match = self.line_re.match(line)
+            if match:
+                request_uri = match.group('request_uri')
+                status = match.group('status')
+                body_bytes_sent = match.group('body_bytes_sent')
+                pos = request_uri.find('?')
+                if pos == -1:
+                    uri = request_uri.lower()
+                else:
+                    uri = request_uri[:pos].lower()
+                pos = uri.rfind('.')
+                if pos == -1:
+                    ext = None
+                else:
+                    ext = uri[pos:]
+                if ext in self.static or not status.startswith('2') or body_bytes_sent == "0":
+                    continue
+                size = self.round_up(int(body_bytes_sent), 4096)
+                count[size] = count.get(size, 0) + 1
+            else:
+                print 'unmatched nginx access log line:', line
+        if count:
+            total = 0
+            for size in count:
+                total = total + count[size]
+            for size in sorted(count):
+                percent = (count[size]/float(total)) * 100
+                print "size %7dk: %7.2f%% %9d %s" % (size/1024, percent, count[size], '*' * int(percent))
+
+    def clean_top(self, count):
+        keys = self.top.keys()
+        #keys.sort(key=lambda x: self.top[x], reverse=True)
+        keys.sort(reverse=True)
+        keys = keys[0:count]
+        new_top = dict()
+        for key in keys:
+            new_top[key] = self.top[key]
+        self.top = new_top
+        self.top_count = count
+
+    def size_top_run(self):
+        self.top = dict()
+        self.top_count = 0
+        for line in self.lines_once():
+            line = line.strip()
+            match = self.line_re.match(line)
+            if match:
+                request_method = match.group('request_method')
+                scheme = match.group('scheme')
+                host = match.group('host')
+                request_uri = match.group('request_uri')
+                status = match.group('status')
+                body_bytes_sent = match.group('body_bytes_sent')
+                pos = request_uri.find('?')
+                if pos == -1:
+                    uri = request_uri.lower()
+                else:
+                    uri = request_uri[:pos].lower()
+                pos = uri.rfind('.')
+                if pos == -1:
+                    ext = None
+                else:
+                    ext = uri[pos:]
+                if ext in self.static or not status.startswith('2') or body_bytes_sent == "0":
+                    continue
+                size = self.round_up(int(body_bytes_sent), 4096)
+                key1 = size
+                key2 = request_method, scheme, host, request_uri
+                size_dict = self.top.get(size, dict())
+                count = size_dict.get(key2, 0)
+                size_dict[key2] = count + 1
+                self.top[size] = size_dict
+                self.top_count = self.top_count + 1
+                if self.top_count > 1000:
+                    self.clean_top(100)
+            else:
+                print 'unmatched nginx access log line:', line
+        if self.top:
+            self.clean_top(100)
+            keys = self.top.keys()
+            keys.sort(reverse=True)
+            for key in keys:
+                keys2 = self.top[key].keys()
+                keys2.sort(key=lambda x: self.top[key][x], reverse=True)
+                lines = 0
+                for key2 in keys2:
+                    size = key
+                    request_method, scheme, host, request_uri = key2
+                    count = self.top[key][key2]
+                    print "size: %10d    count: %7d    request: %4s %s://%s%s" %(size, count, request_method, scheme, host, request_uri)
+                    lines += 1
+                    if lines > 20:
+                        break
+                print
+
+###############################################################################################################################################################
+
 def main():
     try:
         parser = argparse.ArgumentParser(prog="autofilter")
-        parser.add_argument("mode", choices=["daemon", "top", "ext", "bot", "errors"], help="mode")
+        parser.add_argument("mode", choices=["daemon", "top", "ext", "bot", "errors", "size", "size-top"], help="mode")
         args = parser.parse_args()
         AutoFilter(args).run()
     except IOError: # [Errno 32] Broken pipe

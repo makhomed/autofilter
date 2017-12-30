@@ -125,7 +125,7 @@ nginx configuration in context server:
 Command-line usage
 ------------------
 
-``autofilter`` can be started in differend modes: ``daemon``, ``top``, ``ext``, ``bot``, ``errors``.
+``autofilter`` can be started in differend modes: ``daemon``, ``top``, ``ext``, ``bot``, ``errors``, ``size``, ``size-top``.
 
 ``daemon`` mode intended for using ``autofilter`` as systemd service, in this mode ``autofilter``
 continuously monitor nginx access.log file and automatically block detected bots.
@@ -137,6 +137,10 @@ continuously monitor nginx access.log file and automatically block detected bots
 ``bot`` mode display all blocked bots.
 
 ``errors`` mode display all ``5xx`` errors occurred in access.log file.
+
+``size`` mode display page size frequency, this is useful for tuning ``proxy_buffers`` and ``fastcgi_buffers``.
+
+``size-top`` mode display up to 20 urls with frequency count for each page size.
 
 
 Automation via systemd service
