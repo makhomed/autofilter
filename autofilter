@@ -603,7 +603,6 @@ class AutoFilter(object):
 
     def clean_top(self, count):
         keys = self.top.keys()
-        #keys.sort(key=lambda x: self.top[x], reverse=True)
         keys.sort(reverse=True)
         keys = keys[0:count]
         new_top = dict()
@@ -645,12 +644,12 @@ class AutoFilter(object):
                 size_dict[key2] = count + 1
                 self.top[size] = size_dict
                 self.top_count = self.top_count + 1
-                if self.top_count > 1000:
-                    self.clean_top(100)
+                if self.top_count > 5000:
+                    self.clean_top(500)
             else:
                 print 'unmatched nginx access log line:', line
         if self.top:
-            self.clean_top(100)
+            self.clean_top(500)
             keys = self.top.keys()
             keys.sort(reverse=True)
             for key in keys:
