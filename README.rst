@@ -97,7 +97,7 @@ nginx global configuration context:
 
     worker_shutdown_timeout 60s;
 
-nginx configuration in context http:
+nginx configuration in context http if CloudFlare used:
 
 .. code-block:: none
 
@@ -112,7 +112,31 @@ nginx configuration in context http:
     }
 
     log_format frontend '$time_iso8601\t$http_cf_ipcountry\t$remote_addr\t$scheme\t$host\t$request_method\t'
-                      '"$request_uri"\t$status\t$body_bytes_sent\t"$http_referer"\t"$http_user_agent"\t$http_cf_ray';
+                        '"$request_uri"\t$status\t$body_bytes_sent\t"$http_referer"\t"$http_user_agent"\t$http_cf_ray';
+
+    access_log /var/log/nginx/access.log frontend if=$loggable;
+
+nginx configuration in context http if CloudFlare not used, but used `nginx-geo <https://github.com/makhomed/nginx-geo>`_:
+
+.. code-block:: none
+
+    geo $geoip_country_code {
+        default XX;
+        include /etc/nginx/geo/geoip_country_code.conf;
+    }
+
+    geo $bot {
+        default 0;
+        include /opt/autofilter/var/bot.conf;
+    }
+
+    map $bot $loggable {
+        0 1;
+        1 0;
+    }
+
+    log_format frontend '$time_iso8601\t$geoip_country_code\t$remote_addr\t$scheme\t$host\t$request_method\t'
+                        '"$request_uri"\t$status\t$body_bytes_sent\t"$http_referer"\t"$http_user_agent"';
 
     access_log /var/log/nginx/access.log frontend if=$loggable;
 
