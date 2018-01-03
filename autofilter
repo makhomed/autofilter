@@ -7,7 +7,6 @@ import re
 import os
 import os.path
 import signal
-import stat
 import sys
 import time
 import uuid
@@ -17,48 +16,9 @@ import dns.reversename
 import dns.exception
 import netaddr
 
-"""
-
-nginx http config:
-
-    geo $bot {
-        default 0;
-        include /opt/autofilter/var/bot.conf;
-    }
-
-    map $bot $loggable {
-        0 1;
-        1 0;
-    }
-
-    log_format frontend '$time_iso8601\t$http_cf_ipcountry\t$remote_addr\t$scheme\t$host\t$request_method\t'
-                      '"$request_uri"\t$status\t$body_bytes_sent\t"$http_referer"\t"$http_user_agent"\t$http_cf_ray';
-
-    access_log /var/log/nginx/access.log frontend if=$loggable;
-
-nginx server config:
-
-    if ( $bot ) { return 403; }
-
-example access.log line:
-
-2017-12-21T21:38:06+02:00  XX     11.22.33.44  https   example.com    GET   "/image.jpg"    206   865055  "https://example.com/1120/"   "Mozilla/5.0 ... Chrome/61.0.3163.98 ..."  3d0bee50fe892ac7-WAW
-
-software required for work:
-
-# yum install unbound
-# systemctl enable unbound
-# systemctl start unbound
-     interface: 127.0.0.1
-     do-ip6: no
-
-# pip install dnspython
-# pip install netaddr
-
-"""
-
 DEFAULT_LIMIT = 600
 DEFAULT_BLOCK = '24h'
+
 
 class Config(object):
     def __init__(self):
@@ -111,7 +71,6 @@ class Config(object):
                 self.limit_cidr.append(addr)
         self.limit_cidr.sort(key=lambda x: int(x.split('/')[1]), reverse=True)
 
-
     def parse_time(self, block):
         if not block.endswith('h') and not block.endswith('d'):
             sys.exit("invalid time %s" % block)
@@ -122,6 +81,7 @@ class Config(object):
             return num * 60 * 60
         else:
             return num * 24 * 60 * 60
+
 
 class Resolver(object):
     def __init__(self):
@@ -154,6 +114,7 @@ class Resolver(object):
         except dns.resolver.NoNameservers as ex:
             return None, str(ex)
 
+
 class AutoFilter(object):
     def __init__(self, args):
         self.config = Config()
@@ -177,26 +138,29 @@ class AutoFilter(object):
             sys.exit("unknown mode %s" % self.mode)
         if not os.path.isdir('/opt/autofilter/var'):
             os.mkdir('/opt/autofilter/var')
+        self.exit = False
         self.set_signal_handler()
         self.nginx_reload_interval = 60
         self.nginx_pid_filename = '/var/run/nginx.pid'
         self.log_filename = '/var/log/nginx/access.log'
         self.old_log_filename = '/var/log/nginx/access.log.1'
         self.bot_conf_filename = '/opt/autofilter/var/bot.conf'
-        self.line_regexp = ( r'^(?P<time_iso8601>\S+)\t(?P<country>..)\t(?P<ip>\S+)\t(?P<scheme>\S+)\t(?P<host>.*?)\t(?P<request_method>\S+)\t' +
-                             r'"(?P<request_uri>.*?)"\t(?P<status>\S+)\t(?P<body_bytes_sent>\S+)\t"(?P<referer>.*?)"\t"(?P<user_agent>.*?)".*$' )
+        self.line_regexp = (r'^(?P<time_iso8601>\S+)\t(?P<country>..)\t(?P<ip>\S+)\t(?P<scheme>\S+)\t(?P<host>.*?)\t(?P<request_method>\S+)\t' +
+                            r'"(?P<request_uri>.*?)"\t(?P<status>\S+)\t(?P<body_bytes_sent>\S+)\t"(?P<referer>.*?)"\t"(?P<user_agent>.*?)".*$')
         self.line_re = re.compile(self.line_regexp)
         self.inode = None
         self.log_file = None
-        self.static = set([ '.css', '.map', '.js', '.json', '.xml', '.csv', '.txt', '.pdf',
-                            '.rar', '.zip', '.arj', '.7z', '.gz', '.bz2', '.xz', '.iso', '.rpm', '.swf',
-                            '.rtf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx', '.odt', '.ods', '.odp', '.odg',
-                            '.jpg', '.jpeg', '.tif', '.tiff', '.png', '.gif', '.svg', '.bmp', '.ico', '.webp',
-                            '.eot', '.otf', '.ttf', '.woff', '.woff2',
-                            '.mp3', '.ogg', '.m4a', '.mid', '.midi', '.ra',
-                            '.mp4', '.webm', '.3gpp', '.3gp', '.ts', '.mpeg', '.mpg', '.mov', '.flv', '.m4v', '.mng', '.asx', '.asf', '.wmv', '.avi',
-                        ])
+        self.static = set(['.css', '.map', '.js', '.json', '.xml', '.csv', '.txt', '.pdf',
+                           '.rar', '.zip', '.arj', '.7z', '.gz', '.bz2', '.xz', '.iso', '.rpm', '.swf',
+                           '.rtf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx', '.odt', '.ods', '.odp', '.odg',
+                           '.jpg', '.jpeg', '.tif', '.tiff', '.png', '.gif', '.svg', '.bmp', '.ico', '.webp',
+                           '.eot', '.otf', '.ttf', '.woff', '.woff2',
+                           '.mp3', '.ogg', '.m4a', '.mid', '.midi', '.ra',
+                           '.mp4', '.webm', '.3gpp', '.3gp', '.ts', '.mpeg', '.mpg', '.mov', '.flv', '.m4v', '.mng', '.asx', '.asf', '.wmv', '.avi'])
         self.clear_batch()
+        self.last_nginx_reload = 0
+        self.botnet = set()
+        self.prefix = None
 
     def check_exit(self):
         if self.exit:
@@ -206,7 +170,6 @@ class AutoFilter(object):
         self.exit = True
 
     def set_signal_handler(self):
-        self.exit = False
         signal.signal(signal.SIGINT, self.exit_gracefully)
         signal.signal(signal.SIGTERM, self.exit_gracefully)
 
@@ -267,45 +230,45 @@ class AutoFilter(object):
         sys.exit(0)
 
     def process_line(self, line):
-            line = line.strip()
-            match = self.line_re.match(line)
-            if match:
-                country = match.group('country')
-                ip = match.group('ip')
-                request_uri = match.group('request_uri')
-                status = match.group('status')
-                request_method = match.group('request_method')
+        line = line.strip()
+        match = self.line_re.match(line)
+        if match:
+            country = match.group('country')
+            ip = match.group('ip')
+            request_uri = match.group('request_uri')
+            status = match.group('status')
+            request_method = match.group('request_method')
 
-                pos = request_uri.find('?')
-                if pos == -1:
-                    uri = request_uri.lower()
-                    is_args = False
-                else:
-                    uri = request_uri[:pos].lower()
-                    is_args = True
-
-                pos = uri.rfind('.')
-                if pos == -1:
-                    ext = None
-                else:
-                    ext = uri[pos:]
-
-                if ext in self.static:
-                    weight = 1
-                elif status.startswith('3'):
-                    weight = 1
-                elif request_method == 'POST':
-                    weight = 30
-                elif is_args:
-                    weight = 20
-                else:
-                    weight = 10
-
-                old_weight = self.load.get(ip, 0)
-                self.load[ip] = old_weight + weight
-                self.country[ip] = country
+            pos = request_uri.find('?')
+            if pos == -1:
+                uri = request_uri.lower()
+                is_args = False
             else:
-                print 'unmatched nginx access log line:', line
+                uri = request_uri[:pos].lower()
+                is_args = True
+
+            pos = uri.rfind('.')
+            if pos == -1:
+                ext = None
+            else:
+                ext = uri[pos:]
+
+            if ext in self.static:
+                weight = 1
+            elif status.startswith('3'):
+                weight = 1
+            elif request_method == 'POST':
+                weight = 30
+            elif is_args:
+                weight = 20
+            else:
+                weight = 10
+
+            old_weight = self.load.get(ip, 0)
+            self.load[ip] = old_weight + weight
+            self.country[ip] = country
+        else:
+            print 'unmatched nginx access log line:', line
 
     def is_whitelisted_search_engine(self, domain):
         # https://support.google.com/webmasters/answer/80553?hl=en
@@ -324,6 +287,7 @@ class AutoFilter(object):
         for cidr in self.config.limit_cidr:
             if netaddr.IPAddress(ip) in netaddr.IPNetwork(cidr):
                 return self.config.limit.get(cidr)
+        return None
 
     def is_ip_blocked(self, ip, country, load):
         limit = self.config.limit.get(ip)
@@ -401,7 +365,7 @@ class AutoFilter(object):
     def delete_expired_records(self, bot):
         now = time.time()
         for ip in bot.keys():
-            block_until, country, load, text = bot[ip]
+            block_until, dummy_country, dummy_load, dummy_text = bot[ip]
             if block_until < now:
                 del bot[ip]
         return bot
@@ -506,10 +470,8 @@ class AutoFilter(object):
                 pos = request_uri.find('?')
                 if pos == -1:
                     uri = request_uri.lower()
-                    is_args = False
                 else:
                     uri = request_uri[:pos].lower()
-                    is_args = True
                 pos = uri.rfind('.')
                 if pos == -1:
                     ext = None
@@ -598,8 +560,8 @@ class AutoFilter(object):
             for size in count:
                 total = total + count[size]
             for size in sorted(count):
-                percent = (count[size]/float(total)) * 100
-                print "size %7dk: %7.2f%% %9d %s" % (size/1024, percent, count[size], '*' * int(percent))
+                percent = (count[size] / float(total)) * 100
+                print "size %7dk: %7.2f%% %9d %s" % (size / 1024, percent, count[size], '*' * int(percent))
 
     def clean_top(self, count):
         keys = self.top.keys()
@@ -637,7 +599,6 @@ class AutoFilter(object):
                 if ext in self.static or not status.startswith('2') or body_bytes_sent == "0":
                     continue
                 size = self.round_up(int(body_bytes_sent), 4096)
-                key1 = size
                 key2 = request_method, scheme, host, request_uri
                 size_dict = self.top.get(size, dict())
                 count = size_dict.get(key2, 0)
@@ -660,7 +621,7 @@ class AutoFilter(object):
                     size = key
                     request_method, scheme, host, request_uri = key2
                     count = self.top[key][key2]
-                    print "size: %10d    count: %7d    request: %4s %s://%s%s" %(size, count, request_method, scheme, host, request_uri)
+                    print "size: %10d    count: %7d    request: %4s %s://%s%s" % (size, count, request_method, scheme, host, request_uri)
                     lines += 1
                     if lines > 20:
                         break
@@ -668,15 +629,17 @@ class AutoFilter(object):
 
 ###############################################################################################################################################################
 
+
 def main():
     try:
         parser = argparse.ArgumentParser(prog="autofilter")
         parser.add_argument("mode", choices=["daemon", "top", "ext", "bot", "errors", "size", "size-top"], help="mode")
         args = parser.parse_args()
         AutoFilter(args).run()
-    except IOError: # [Errno 32] Broken pipe
+    except IOError:  # [Errno 32] Broken pipe
         pass
     sys.exit(0)
 
-if __name__=='__main__':
+
+if __name__ == '__main__':
     main()
