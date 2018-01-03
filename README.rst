@@ -6,8 +6,8 @@ Automatically mitigate layer 7 DDoS attacks.
 Installation
 ------------
 
- - ``cd /opt``
- - ``git clone https://github.com/makhomed/autofilter.git autofilter``
+- ``cd /opt``
+- ``git clone https://github.com/makhomed/autofilter.git autofilter``
 
 Also you need to install unbound and dnspython:
 
@@ -25,14 +25,14 @@ Also you need to install unbound and dnspython:
 Upgrade
 -------
 
- - ``cd /opt/autofilter``
- - ``git pull``
+- ``cd /opt/autofilter``
+- ``git pull``
 
 Configuration
 -------------
 
-  - ``vim /opt/autofilter/autofilter.conf``
-  - write to config something like this:
+- ``vim /opt/autofilter/autofilter.conf``
+- write to config something like this:
 
 .. code-block:: none
 
@@ -188,10 +188,10 @@ After it create systemd service, for example, in file ``/etc/systemd/system/auto
 
 After this you need to start service:
 
-  - ``systemctl daemon-reload``
-  - ``systemctl enable autofilter``
-  - ``systemctl start autofilter``
-  - ``systemctl status autofilter``
+- ``systemctl daemon-reload``
+- ``systemctl enable autofilter``
+- ``systemctl start autofilter``
+- ``systemctl status autofilter``
 
 If all ok you will see what service is enabled and running.
 
