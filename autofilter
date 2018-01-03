@@ -120,29 +120,13 @@ class AutoFilter(object):
         self.config = Config()
         self.resolver = Resolver()
         self.mode = args.mode
-        if self.mode == "daemon":
-            self.run = self.daemon_run
-        elif self.mode == "top":
-            self.run = self.top_run
-        elif self.mode == "ext":
-            self.run = self.ext_run
-        elif self.mode == "bot":
-            self.run = self.bot_run
-        elif self.mode == "errors":
-            self.run = self.errors_run
-        elif self.mode == "size":
-            self.run = self.size_run
-        elif self.mode == "size-top":
-            self.run = self.size_top_run
-        else:
-            sys.exit("unknown mode %s" % self.mode)
         if not os.path.isdir('/opt/autofilter/var'):
             os.mkdir('/opt/autofilter/var')
         self.exit = False
         self.set_signal_handler()
         self.nginx_reload_interval = 60
         self.nginx_pid_filename = '/var/run/nginx.pid'
-        self.log_filename = '/var/log/nginx/access.log'
+        self.log_filename = args.log
         self.old_log_filename = '/var/log/nginx/access.log.1'
         self.bot_conf_filename = '/opt/autofilter/var/bot.conf'
         self.line_regexp = (r'^(?P<time_iso8601>\S+)\t(?P<country>..)\t(?P<ip>\S+)\t(?P<scheme>\S+)\t(?P<host>.*?)\t(?P<request_method>\S+)\t' +
@@ -162,6 +146,24 @@ class AutoFilter(object):
         self.botnet = set()
         self.prefix = None
 
+    def run(self):
+        if self.mode == "daemon":
+            self.daemon_run()
+        elif self.mode == "top":
+            self.top_run()
+        elif self.mode == "ext":
+            self.ext_run()
+        elif self.mode == "bot":
+            self.bot_run()
+        elif self.mode == "errors":
+            self.errors_run()
+        elif self.mode == "size":
+            self.size_run()
+        elif self.mode == "size-top":
+            self.size_top_run()
+        else:
+            sys.exit("unknown mode %s" % self.mode)
+
     def check_exit(self):
         if self.exit:
             sys.exit(0)
@@ -175,7 +177,7 @@ class AutoFilter(object):
 
     def open_log(self):
         if not os.path.isfile(self.log_filename):
-            sys.exit("log file %s not exists, can't run" % self.log_filename)
+            sys.exit("log file '%s' not exists, can't run" % self.log_filename)
         stat = os.stat(self.log_filename)
         self.log_file = codecs.open(self.log_filename, 'rb', encoding='UTF-8')
         self.inode = stat.st_ino
@@ -397,6 +399,8 @@ class AutoFilter(object):
         self.clear_batch()
 
     def daemon_run(self):
+        if self.log_filename != '/var/log/nginx/access.log':
+            sys.exit("error: daemon mode can't be started with custom log '%s'" % self.log_filename)
         self.prefix = None
         self.botnet = set()
         self.last_nginx_reload = 0
@@ -633,6 +637,7 @@ class AutoFilter(object):
 def main():
     try:
         parser = argparse.ArgumentParser(prog="autofilter")
+        parser.add_argument("--log", required=False, metavar="LOG", dest="log", default="/var/log/nginx/access.log", help="use log file (/var/log/nginx/access.log)")
         parser.add_argument("mode", choices=["daemon", "top", "ext", "bot", "errors", "size", "size-top"], help="mode")
         args = parser.parse_args()
         AutoFilter(args).run()
