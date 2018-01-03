@@ -14,10 +14,11 @@ Also you need to install unbound and dnspython:
 .. code-block:: none
 
     # yum install unbound
+    # vim /etc/unbound/unbound.conf
+            interface: 127.0.0.1
+            do-ip6: no
     # systemctl enable unbound
     # systemctl start unbound
-        interface: 127.0.0.1
-        do-ip6: no
 
     # pip install dnspython
     # pip install netaddr
