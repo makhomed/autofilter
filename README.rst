@@ -147,6 +147,8 @@ nginx configuration in context server:
 
     if ( $bot ) { return 429; }
 
+**Warning!!!** If nginx ``log_format`` changed you would probably need to execute command ``logrotate -f /etc/logrotate.d/nginx``.
+
 Command-line usage
 ------------------
 
