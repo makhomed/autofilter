@@ -129,7 +129,7 @@ class AutoFilter(object):
         self.log_filename = args.log
         self.old_log_filename = '/var/log/nginx/access.log.1'
         self.bot_conf_filename = '/opt/autofilter/var/bot.conf'
-        self.line_regexp = (r'^(?P<time_iso8601>\S+)\t(?P<country>..)\t(?P<ip>\S+)\t(?P<scheme>\S+)\t(?P<host>.*?)\t(?P<request_method>\S+)\t' +
+        self.line_regexp = (r'^(?P<time_iso8601>\S+)\t(?P<country>\S+)\t(?P<ip>\S+)\t(?P<scheme>\S+)\t(?P<host>.*?)\t(?P<request_method>\S+)\t' +
                             r'"(?P<request_uri>.*?)"\t(?P<status>\S+)\t(?P<body_bytes_sent>\S+)\t"(?P<referer>.*?)"\t"(?P<user_agent>.*?)".*$')
         self.line_re = re.compile(self.line_regexp)
         self.inode = None
