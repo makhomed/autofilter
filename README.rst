@@ -9,7 +9,7 @@ Installation
 - ``cd /opt``
 - ``git clone https://github.com/makhomed/autofilter.git autofilter``
 
-Also you need to install unbound and dnspython:
+Also you need to install unbound, dnspython and netaddr:
 
 .. code-block:: none
 
