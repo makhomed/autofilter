@@ -240,6 +240,7 @@ class AutoFilter(object):
             request_uri = match.group('request_uri')
             status = match.group('status')
             request_method = match.group('request_method')
+            user_agent = match.group('user_agent')
 
             pos = request_uri.find('?')
             if pos == -1:
@@ -269,6 +270,7 @@ class AutoFilter(object):
             old_weight = self.load.get(ip, 0)
             self.load[ip] = old_weight + weight
             self.country[ip] = country
+            self.user_agent[ip] = user_agent
         else:
             print 'unmatched nginx access log line:', line
 
@@ -323,6 +325,7 @@ class AutoFilter(object):
     def clear_batch(self):
         self.load = dict()
         self.country = dict()
+        self.user_agent = dict()
 
 ###############################################################################################################################################################
 
@@ -420,6 +423,7 @@ class AutoFilter(object):
             if load > top_load:
                 self.top_load[ip] = load
                 self.top_country[ip] = self.country[ip]
+                self.top_user_agent[ip] = self.user_agent[ip]
                 self.top_prefix[ip] = self.prefix
         self.clear_batch()
 
@@ -428,6 +432,7 @@ class AutoFilter(object):
         self.top_load = dict()
         self.top_country = dict()
         self.top_prefix = dict()
+        self.top_user_agent = dict()
         for line in self.lines_once():
             self.check_exit()
             time_iso8601, dummy_rest_of_line = line.split('\t', 1)
@@ -442,11 +447,14 @@ class AutoFilter(object):
             self.check_exit()
             load = self.top_load[ip]
             country = self.top_country[ip]
+            user_agent = self.top_user_agent[ip]
             blocked, domain, err = self.is_ip_blocked(ip, country, load)
             if blocked:
                 status = "BLOCKED"
+                user_agent = " | %s" % user_agent
             else:
                 status = "-------"
+                user_agent = ""
             if domain:
                 text = domain
             elif err:
@@ -454,7 +462,7 @@ class AutoFilter(object):
             else:
                 text = ""
             if blocked or load > self.config.limit['ALL']:
-                print "%s %8d %s %15s %s %s" % (self.top_prefix[ip], self.top_load[ip], self.top_country[ip], ip, status, text)
+                print "%s %8d %s %15s %s %s%s" % (self.top_prefix[ip], self.top_load[ip], self.top_country[ip], ip, status, text, user_agent)
 
 ###############################################################################################################################################################
 
