@@ -392,10 +392,11 @@ class AutoFilter(object):
             blocked, domain, err = self.is_ip_blocked(ip, country, load)
             if blocked:
                 block_until = self.ip_block_until(ip, country)
+                user_agent = self.user_agent[ip]
                 if domain is None:
-                    text = "error: %s" % err
+                    text = "error: %s | %s" % (err, user_agent)
                 else:
-                    text = domain
+                    text = "%s | %s" % (domain, user_agent)
                 bot[ip] = block_until, country, load, text
         self.write_bot_conf(bot)
         self.reload_nginx(bot)
