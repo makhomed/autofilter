@@ -1,11 +1,13 @@
 #!/usr/bin/python -u
 
 import argparse
-import datetime
 import codecs
-import re
+import datetime
+import grp
 import os
 import os.path
+import pwd
+import re
 import signal
 import sys
 import time
@@ -195,7 +197,9 @@ class AutoFilter(object):
             os.rename(self.log_filename, self.old_log_filename)
             with open(self.log_filename, 'ab'):
                 os.utime(self.log_filename, None)
-            os.chown(self.log_filename, "nginx", "adm")
+            uid = pwd.getpwnam("nginx").pw_uid
+            gid = grp.getgrnam("adm").gr_gid
+            os.chown(self.log_filename, uid, gid)
             os.chmod(self.log_filename, 0640)
             self.send_nginx_signal(signal.SIGUSR1)
             time.sleep(1)
