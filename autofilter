@@ -163,6 +163,8 @@ class AutoFilter(object):
             self.size_run()
         elif self.mode == "size-top":
             self.size_top_run()
+        elif self.mode == "tor":
+            self.tor_run()
         else:
             sys.exit("unknown mode %s" % self.mode)
 
@@ -528,6 +530,24 @@ class AutoFilter(object):
 
 ###############################################################################################################################################################
 
+    def tor_run(self):
+        out = list()
+        import urllib2
+        response = urllib2.urlopen('https://check.torproject.org/cgi-bin/TorBulkExitList.py?ip=1.1.1.1')
+        lines = response.read().split("\n")
+        for line in lines:
+            comment_start = line.find('#')
+            if comment_start > -1:
+                line = line[:comment_start]
+            line = line.strip()
+            if not line:
+                continue
+            line = " %15s 1;" % line
+            out.append(line)
+        self.write_file("/opt/autofilter/var/tor.conf", "\n".join(out))
+
+###############################################################################################################################################################
+
     def errors_run(self):
         for line in self.lines_once():
             line = line.strip()
@@ -653,7 +673,7 @@ def main():
     try:
         parser = argparse.ArgumentParser(prog="autofilter")
         parser.add_argument("--log", required=False, metavar="LOG", dest="log", default="/var/log/nginx/access.log", help="use log file (/var/log/nginx/access.log)")
-        parser.add_argument("mode", choices=["daemon", "top", "ext", "bot", "errors", "size", "size-top"], help="mode")
+        parser.add_argument("mode", choices=["daemon", "top", "ext", "bot", "errors", "size", "size-top", "tor"], help="mode")
         args = parser.parse_args()
         AutoFilter(args).run()
     except IOError:  # [Errno 32] Broken pipe
