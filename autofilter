@@ -199,7 +199,6 @@ class AutoFilter(object):
             os.chmod(self.log_filename, 0640)
             self.send_nginx_signal(signal.SIGUSR1)
             time.sleep(1)
-
         stat = os.stat(self.log_filename)
         if self.inode != stat.st_ino:
             if self.log_file:
@@ -220,7 +219,9 @@ class AutoFilter(object):
     def lines_tail(self):
         self.open_log()
         while not self.exit:
-            while True:
+            count = 1024
+            while count > 0:
+                count = count - 1
                 line = self.log_file.readline()
                 self.check_exit()
                 if line:
@@ -228,7 +229,8 @@ class AutoFilter(object):
                 else:
                     break
             self.reopen_log()
-            time.sleep(1)
+            if count > 0:
+                time.sleep(1)
         sys.exit(0)
 
     def process_line(self, line):
