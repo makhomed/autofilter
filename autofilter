@@ -545,6 +545,7 @@ class AutoFilter(object):
             line = " %15s 1;" % line
             out.append(line)
         self.write_file("/opt/autofilter/var/tor.conf", "\n".join(out))
+        self.send_nginx_signal(signal.SIGHUP)
 
 ###############################################################################################################################################################
 
