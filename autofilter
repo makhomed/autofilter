@@ -273,7 +273,7 @@ class AutoFilter(object):
             if ext in self.static:
                 weight = 1
             elif status.startswith('3'):
-                weight = 1
+                weight = 10
             elif request_method == 'POST':
                 weight = 30
             elif is_args:
