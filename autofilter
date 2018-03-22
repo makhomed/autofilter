@@ -9,8 +9,10 @@ import os.path
 import pwd
 import re
 import signal
+import subprocess
 import sys
 import time
+import urllib2
 import uuid
 
 import dns.resolver
@@ -167,6 +169,8 @@ class AutoFilter(object):
             self.tor_run()
         elif self.mode == "tor-ban":
             self.tor_ban_run()
+        elif self.mode == "bot-ban":
+            self.bot_ban_run()
         else:
             sys.exit("unknown mode %s" % self.mode)
 
@@ -534,7 +538,6 @@ class AutoFilter(object):
 
     def tor_run(self):
         out = list()
-        import urllib2
         response = urllib2.urlopen('https://check.torproject.org/cgi-bin/TorBulkExitList.py?ip=1.1.1.1')
         lines = response.read().split("\n")
         for line in lines:
@@ -553,8 +556,6 @@ class AutoFilter(object):
 
     def tor_ban_run(self):
         out = list()
-        import urllib2
-        import subprocess
         response = urllib2.urlopen('https://check.torproject.org/cgi-bin/TorBulkExitList.py?ip=1.1.1.1')
         lines = response.read().split("\n")
         for line in lines:
@@ -565,6 +566,13 @@ class AutoFilter(object):
             if not line:
                 continue
             ip = line
+            subprocess.call([ "ipset", "add", "ddos", ip, "-exist"])
+
+###############################################################################################################################################################
+
+    def bot_ban_run(self):
+        bot = self.read_bot_conf()
+        for ip in bot:
             subprocess.call([ "ipset", "add", "ddos", ip, "-exist"])
 
 ###############################################################################################################################################################
@@ -694,7 +702,7 @@ def main():
     try:
         parser = argparse.ArgumentParser(prog="autofilter")
         parser.add_argument("--log", required=False, metavar="LOG", dest="log", default="/var/log/nginx/access.log", help="use log file (/var/log/nginx/access.log)")
-        parser.add_argument("mode", choices=["daemon", "top", "ext", "bot", "errors", "size", "size-top", "tor", "tor-ban"], help="mode")
+        parser.add_argument("mode", choices=["daemon", "top", "ext", "bot", "errors", "size", "size-top", "tor", "tor-ban", "bot-ban"], help="mode")
         args = parser.parse_args()
         AutoFilter(args).run()
     except IOError:  # [Errno 32] Broken pipe
