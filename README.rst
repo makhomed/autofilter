@@ -242,7 +242,8 @@ and enable iptables service via command ``systemctl enable iptables``. After thi
 ``/etc/sysconfig/iptables`` and add line ``-A INPUT -m set --match-set ddos src -j DROP`` to ``*filer`` table.
 After this - start or restart iptables service via command ``systemctl start iptables`` or ``systemctl restart iptables``.
 
-Now you can add any single IP to ddos table via command ``ipset add ddos 11.22.33.44``
+Now you can add any single IP to ddos table via command ``ipset add ddos 11.22.33.44`` 
+and this ip ``11.22.33.44`` will be blocked via iptables to 24 hours.
 
 Automation via cron
 -------------------
