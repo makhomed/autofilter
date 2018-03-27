@@ -102,6 +102,26 @@ nginx configuration in context http if CloudFlare used:
 
 .. code-block:: none
 
+    set_real_ip_from   103.21.244.0/22;
+    set_real_ip_from   103.22.200.0/22;
+    set_real_ip_from   103.31.4.0/22;
+    set_real_ip_from   104.16.0.0/12;
+    set_real_ip_from   108.162.192.0/18;
+    set_real_ip_from   131.0.72.0/22;
+    set_real_ip_from   141.101.64.0/18;
+    set_real_ip_from   162.158.0.0/15;
+    set_real_ip_from   172.64.0.0/13;
+    set_real_ip_from   173.245.48.0/20;
+    set_real_ip_from   188.114.96.0/20;
+    set_real_ip_from   190.93.240.0/20;
+    set_real_ip_from   197.234.240.0/22;
+    set_real_ip_from   198.41.128.0/17;
+    # WARNING!
+    # get actual list of networks from 
+    # https://www.cloudflare.com/ips-v4
+    
+    real_ip_header     CF-Connecting-IP;
+
     geo $bot {
         default 0;
         include /opt/autofilter/var/bot.conf;
@@ -198,4 +218,50 @@ After this you need to start service:
 - ``systemctl status autofilter``
 
 If all ok you will see what service is enabled and running.
+
+Configuring ipset
+-----------------
+
+If CloudFlare not used - you can use ipset to block bots at ip level.
+
+Create configuration file ``/etc/sysconfig/modules/ip_set.modules`` with content:
+
+.. code-block:: bash
+
+    #/bin/bash
+
+    /sbin/modprobe ip_set
+
+    /usr/sbin/ipset create ddos hash:ip hashsize 16384 maxelem 262144 timeout 86400
+
+mark it executable with command ``chmod +x /etc/sysconfig/modules/ip_set.modules``
+and run this script to create ipset named ``ddos``.
+
+Also you need to remove ``firewalld``, install ``iptables-services`` package via command ``yum install iptables-services``
+and enable iptables service via command ``systemctl enable iptables``. After this you need to edit configuration file
+``/etc/sysconfig/iptables`` and add line ``-A INPUT -m set --match-set ddos src -j DROP`` to ``*filer`` table.
+After this - start or restart iptables service via command ``systemctl start iptables`` or ``systemctl restart iptables``.
+
+Now you can add any single IP to ddos table via command ``ipset add ddos 11.22.33.44``
+
+Automation via cron
+-------------------
+
+Create configuration file ``/etc/cron.d/autofilter-ban`` with content:
+
+.. code-block:: bash
+    
+    RANDOM_DELAY=45
+
+    PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/root/bin
+
+     0 * * * * root /opt/autofilter/autofilter tor-ban
+
+    30 * * * * root /opt/autofilter/autofilter bot-ban
+
+Command ``/opt/autofilter/autofilter tor-ban`` will block via ipset all tor exit nodes
+from list ``https://check.torproject.org/cgi-bin/TorBulkExitList.py?ip=1.1.1.1``
+
+Command ``/opt/autofilter/autofilter bot-ban`` will block via ipset all bots
+from file ``/opt/autofilter/var/bot.conf``.
 
