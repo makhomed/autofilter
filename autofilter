@@ -20,7 +20,7 @@ import dns.reversename
 import dns.exception
 import netaddr
 
-DEFAULT_LIMIT = 600
+DEFAULT_LIMIT = 2000
 DEFAULT_BLOCK = '24h'
 
 
@@ -201,7 +201,7 @@ class AutoFilter(object):
 
     def reopen_log(self):
         stat = os.stat(self.log_filename)
-        if stat.st_size > 1024 * 1024 * 1024:
+        if stat.st_size > 4 * 1024 * 1024 * 1024:
             os.rename(self.log_filename, self.old_log_filename)
             with open(self.log_filename, 'ab'):
                 os.utime(self.log_filename, None)

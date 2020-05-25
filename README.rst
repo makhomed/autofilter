@@ -77,7 +77,7 @@ Search engine bots from Google, Yandex and Bing are detected automatically and w
         else:
             return False
 
-By default ``limit ALL 600`` if other value not specified in config.
+By default ``limit ALL 2000`` if other value not specified in config.
 
 ``block`` directive has syntax: ``block <entity> <time>``.
 
