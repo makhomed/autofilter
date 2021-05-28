@@ -1,5 +1,5 @@
-autofilter
-==========
+autofilter (version 1.0)
+========================
 
 Automatically mitigate layer 7 DDoS attacks.
 
