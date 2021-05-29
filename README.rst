@@ -111,8 +111,9 @@ nginx configuration in context http for standalone server:
         volatile;
     }
 
-    log_format standalone '$time\t$geoip_country_code\t$remote_addr\t$upstream_cache_status\t$upstream_response_time'
-        '\t$status\t$scheme\t$host\t$request_method\t$request_uri\t$body_bytes_sent\t$http_referer\t$http_user_agent';
+    log_format standalone '$time\t$geoip_country_code\t$remote_addr\t$upstream_cache_status'
+                       '\t$upstream_response_time\t$status\t$scheme\t$host\t$request_method'
+                         '\t$request_uri\t$body_bytes_sent\t$http_referer\t$http_user_agent';
 
     access_log /var/log/nginx/access.log standalone if=$loggable;
 
@@ -142,8 +143,9 @@ nginx configuration in context http for nginx frontend server:
         volatile;
     }
 
-    log_format frontend '$time\t$geoip_country_code\t$remote_addr\t$upstream_http_x_cache_status\t$upstream_http_x_response_time'
-                    '\t$status\t$scheme\t$host\t$request_method\t$request_uri\t$body_bytes_sent\t$http_referer\t$http_user_agent';
+    log_format frontend '$time\t$geoip_country_code\t$remote_addr\t$upstream_http_x_cache_status'
+                     '\t$upstream_http_x_response_time\t$status\t$scheme\t$host\t$request_method'
+                              '\t$request_uri\t$body_bytes_sent\t$http_referer\t$http_user_agent';
 
     access_log /var/log/nginx/access.log frontend if=$loggable;
 
@@ -169,8 +171,8 @@ nginx configuration in context http for nginx backend server:
     }
 
     log_format backend  '$time\t$http_x_geoip_country_code\t$remote_addr\t$upstream_cache_status'
-                        '\t$upstream_response_time\t$status\t$http_x_forwarded_proto\t$host\t$request_method'
-                        '\t$request_uri\t$body_bytes_sent\t$http_referer\t$http_user_agent';
+            '\t$upstream_response_time\t$status\t$http_x_forwarded_proto\t$host\t$request_method'
+                              '\t$request_uri\t$body_bytes_sent\t$http_referer\t$http_user_agent';
 
     access_log /var/log/nginx/access.log backend;
 
