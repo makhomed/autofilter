@@ -351,6 +351,9 @@ class AutoFilter:
         # https://www.bing.com/webmaster/help/how-to-verify-bingbot-3905dc26
         elif domain.endswith(".search.msn.com."):
             return True
+        # The Facebook Crawler ? https://developers.facebook.com/docs/sharing/webmasters/crawler
+        elif domain.endswith(".fbsv.net."):
+            return True
         else:
             return False
 
