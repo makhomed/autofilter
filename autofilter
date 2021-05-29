@@ -109,7 +109,8 @@ class Config:
                     return config
                 config.limit_one_uri_count[entity] = limit_one_uri_count
                 if limit_one_uri_count > limit_request_count:
-                    logger.error(f"invalid config: invalid limit_one_uri_count value ('{limit_one_uri_count}') > limit_request_count ('{limit_request_count}') for entity '{entity}'")
+                    logger.error(f"invalid config: invalid limit_one_uri_count value ('{limit_one_uri_count}')"
+                                 + " > limit_request_count ('{limit_request_count}') for entity '{entity}'")
                     return config
 
             elif name == 'block':
