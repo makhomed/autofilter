@@ -1,37 +1,70 @@
-#!/usr/bin/python -u
+#!/usr/bin/python3 -u
 
-import argparse
-import codecs
 import datetime
-import grp
+import logging
+import logging.handlers
 import os
 import os.path
-import pwd
-import re
+import pathlib
 import signal
-import subprocess
 import sys
 import time
-import urllib2
 import uuid
 
+import dns.exception
 import dns.resolver
 import dns.reversename
-import dns.exception
 import netaddr
 
-DEFAULT_LIMIT = 2000
-DEFAULT_BLOCK = '24h'
+__author__ = "Gena Makhomed"
+__contact__ = "https://github.com/makhomed/autofilter"
+__license__ = "GNU General Public License version 3"
+__version__ = "2.0.0"
+
+DEFAULT_REMOTE_ADDR_REQUEST_COUNT_THRESHOLD = 128
+DEFAULT_REMOTE_ADDR_ONE_URI_COUNT_THRESHOLD = 32
+DEFAULT_REMOTE_ADDR_BLOCK_PERIOD_IN_SECONDS = 24 * 60 * 60
+
+AUTOFILTER_CONFIG_FILENAME = '/opt/autofilter/autofilter.conf'
+AUTOFILTER_LOG_FILENAME = '/opt/autofilter/var/autofilter.log'
+AUTOFILTER_BOT_CONF_FILENAME = '/opt/autofilter/var/bot.conf'
+
+NGINX_MASTER_PID_FILENAME = '/var/run/nginx.pid'
+NGINX_ACCESS_LOG_FILENAME = '/var/log/nginx/access.log'
+NGINX_SERVICE_RELOAD_INTERVAL = 60
 
 
-class Config(object):
+class Config:
     def __init__(self):
-        self.limit = dict()
-        self.limit_cidr = list()
-        self.block = dict()
-        if not os.path.isfile('/opt/autofilter/autofilter.conf'):
-            sys.exit("configuration file '/opt/autofilter/autofilter.conf' not exists")
-        with codecs.open('/opt/autofilter/autofilter.conf', 'rb', encoding='UTF-8') as config_file:
+        self.limit_request_count = {}
+        self.limit_one_uri_count = {}
+        self.block = {}
+        self.valid = False
+
+    @staticmethod
+    def get_config():
+        config = Config.read_config_file()
+        if config.valid:
+            return config
+        else:
+            return Config.get_default_config()
+
+    @staticmethod
+    def get_default_config():
+        config = Config()
+        config.limit_request_count['ALL'] = DEFAULT_REMOTE_ADDR_REQUEST_COUNT_THRESHOLD
+        config.limit_one_uri_count['ALL'] = DEFAULT_REMOTE_ADDR_ONE_URI_COUNT_THRESHOLD
+        config.block['ALL'] = DEFAULT_REMOTE_ADDR_BLOCK_PERIOD_IN_SECONDS
+        config.valid = True
+        return config
+
+    @staticmethod
+    def read_config_file():
+        if not os.path.isfile(AUTOFILTER_CONFIG_FILENAME):
+            return Config.get_default_config()
+        config = Config()
+        logger = logging.getLogger('config')
+        with open(AUTOFILTER_CONFIG_FILENAME) as config_file:
             lines = config_file.read().split('\n')
         for line in lines:
             comment_start = line.find('#')
@@ -40,54 +73,111 @@ class Config(object):
             line = line.strip()
             if not line:
                 continue
-            line = line.replace("\t", "\x20")
+            line = line.replace('\t', '\x20')
             line = line.lower()
             name, value = line.split(None, 1)
+
             if name == 'limit':
-                entity, limit = value.split(None, 1)
+                entity, limit_request_count, limit_one_uri_count = value.split(None, 2)
                 if ':' not in entity:
                     entity = entity.upper()
-                if entity in self.limit:
-                    sys.exit("limit for %s already defined in config" % entity)
-                if limit == 'none':
-                    limit = 2**64 - 1
+                if entity in config.limit_request_count:
+                    logger.error(f"invalid config: limit for entity '{entity}' already defined")
+                    return config
+                if limit_request_count == 'none':
+                    limit_request_count = 2**64 - 1
                 else:
-                    limit = int(limit)
-                if limit < 60:
-                    sys.exit("invalid limit value %d for entity %s" % (limit, entity))
-                self.limit[entity] = limit
+                    try:
+                        limit_request_count = int(limit_request_count)
+                    except ValueError as error:
+                        logger.error(f"invalid config: invalid limit value '{limit_request_count}' for entity '{entity}': {error}")
+                        return config
+                if limit_request_count < 1:
+                    logger.error(f"invalid config: invalid limit value '{limit_request_count}' for entity '{entity}'")
+                    return config
+                config.limit_request_count[entity] = limit_request_count
+                if limit_one_uri_count == 'none':
+                    limit_one_uri_count = 2**64 - 1
+                else:
+                    try:
+                        limit_one_uri_count = int(limit_one_uri_count)
+                    except ValueError as error:
+                        logger.error(f"invalid config: invalid limit value '{limit_one_uri_count}' for entity '{entity}': {error}")
+                        return config
+                if limit_one_uri_count < 1:
+                    logger.error(f"invalid config: invalid limit value '{limit_one_uri_count}' for entity '{entity}'")
+                    return config
+                config.limit_one_uri_count[entity] = limit_one_uri_count
+                if limit_one_uri_count > limit_request_count:
+                    logger.error(f"invalid config: invalid limit_one_uri_count value ('{limit_one_uri_count}') > limit_request_count ('{limit_request_count}') for entity '{entity}'")
+                    return config
+
             elif name == 'block':
-                entity, block = value.split(None, 1)
+                try:
+                    entity, block = value.split(None, 1)
+                except ValueError as error:
+                    logger.error(f"invalid config: bad block directive: '{line}': {error}")
+                    return config
                 if ':' not in entity:
                     entity = entity.upper()
-                if entity in self.block:
-                    sys.exit("limit for %s already defined in config" % entity)
-                block = self.parse_time(block)
-                self.block[entity] = block
+                if entity in config.block:
+                    logger.error(f"invalid config: block for entity '{entity}' already defined")
+                    return config
+                valid, block = Config.parse_time(block)
+                if valid:
+                    config.block[entity] = block
+                else:
+                    return config
             else:
-                sys.exit("invalid config directive '%s'" % name)
-        if 'ALL' not in self.limit:
-            self.limit['ALL'] = DEFAULT_LIMIT
-        if 'ALL' not in self.block:
-            self.block['ALL'] = self.parse_time(DEFAULT_BLOCK)
-        for addr in self.limit:
-            if '/' in addr:
-                self.limit_cidr.append(addr)
-        self.limit_cidr.sort(key=lambda x: int(x.split('/')[1]), reverse=True)
+                logger.error(f"invalid config directive '{name}'")
+                return config
 
-    def parse_time(self, block):
+        if 'ALL' not in config.limit_request_count:
+            config.limit_request_count['ALL'] = DEFAULT_REMOTE_ADDR_REQUEST_COUNT_THRESHOLD
+            config.limit_one_uri_count['ALL'] = DEFAULT_REMOTE_ADDR_ONE_URI_COUNT_THRESHOLD
+        if 'ALL' not in config.block:
+            config.block['ALL'] = DEFAULT_REMOTE_ADDR_BLOCK_PERIOD_IN_SECONDS
+
+        for cidr in config.limit_request_count:
+            if '/' in cidr:
+                try:
+                    netaddr.IPNetwork(cidr)
+                except Exception as ex:
+                    logger.error(f"invalid config: invalid CIDR in limit: '{cidr}': {ex}")
+                    return config
+
+        for cidr in config.block:
+            if '/' in cidr:
+                try:
+                    netaddr.IPNetwork(cidr)
+                except Exception as ex:
+                    logger.error(f"invalid config: invalid CIDR in block: '{cidr}': {ex}")
+                    return config
+
+        config.valid = True
+        return config
+
+    @staticmethod
+    def parse_time(block):
+        logger = logging.getLogger('config')
         if not block.endswith('h') and not block.endswith('d'):
-            sys.exit("invalid time %s" % block)
-        num = int(block[:-1])
+            logger.error(f"invalid config: invalid time '{block}'")
+            return False, 0
+        try:
+            num = int(block[:-1])
+        except ValueError as error:
+            logger.error(f"invalid config: invalid time '{block}': {error}")
+            return False, 0
         if num < 1:
-            sys.exit("invalid time %s" % block)
+            logger.error(f"invalid config: invalid time '{block}'")
+            return False, 0
         if block.endswith('h'):
-            return num * 60 * 60
+            return True, num * 60 * 60
         else:
-            return num * 24 * 60 * 60
+            return True, num * 24 * 60 * 60
 
 
-class Resolver(object):
+class Resolver:
     def __init__(self):
         self.resolver = dns.resolver.Resolver(configure=False)
         self.resolver.nameservers = ['127.0.0.1']
@@ -104,75 +194,37 @@ class Resolver(object):
             answer = self.resolver.query(name, query_type)
             name_ip = str(answer[0])
             if name_ip == ip:
-                return name, None
+                return name
             else:
-                return None, "DNS record not match: ip: %s reverse_name %s reverse_name_ip: %s" % (ip, name, name_ip)
-        except dns.exception.Timeout as ex:
-            return None, str(ex)
-        except dns.resolver.NXDOMAIN as ex:
-            return None, str(ex)
-        except dns.resolver.YXDOMAIN as ex:
-            return None, str(ex)
-        except dns.resolver.NoAnswer as ex:
-            return None, str(ex)
-        except dns.resolver.NoNameservers as ex:
-            return None, str(ex)
+                return None
+        except dns.exception.Timeout:
+            return None
+        except dns.resolver.NXDOMAIN:
+            return None
+        except dns.resolver.YXDOMAIN:
+            return None
+        except dns.resolver.NoAnswer:
+            return None
+        except dns.resolver.NoNameservers:
+            return None
 
 
-class AutoFilter(object):
-    def __init__(self, args):
-        self.config = Config()
+class AutoFilter:
+    def __init__(self):
+        self.config = Config.get_config()
         self.resolver = Resolver()
-        self.mode = args.mode
-        if not os.path.isdir('/opt/autofilter/var'):
-            os.mkdir('/opt/autofilter/var')
+        self.log_filename = NGINX_ACCESS_LOG_FILENAME
+        self.log_file_inode = None
+        self.log_file = None
+        self.prefix = None
         self.exit = False
         self.set_signal_handler()
-        self.nginx_reload_interval = 60
-        self.nginx_pid_filename = '/var/run/nginx.pid'
-        self.log_filename = args.log
-        self.old_log_filename = '/var/log/nginx/access.log.1'
-        self.bot_conf_filename = '/opt/autofilter/var/bot.conf'
-        self.line_regexp = (r'^(?P<time_iso8601>\S+)\t(?P<country>\S+)\t(?P<ip>\S+)\t(?P<scheme>\S+)\t(?P<host>.*?)\t(?P<request_method>\S+)\t' +
-                            r'"(?P<request_uri>.*?)"\t(?P<status>\S+)\t(?P<body_bytes_sent>\S+)\t"(?P<referer>.*?)"\t"(?P<user_agent>.*?)".*$')
-        self.line_re = re.compile(self.line_regexp)
-        self.inode = None
-        self.log_file = None
-        self.static = set(['.css', '.map', '.js', '.json', '.xml', '.csv', '.txt', '.pdf',
-                           '.rar', '.zip', '.arj', '.7z', '.gz', '.bz2', '.xz', '.iso', '.rpm', '.swf',
-                           '.rtf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx', '.odt', '.ods', '.odp', '.odg',
-                           '.jpg', '.jpeg', '.tif', '.tiff', '.png', '.gif', '.svg', '.bmp', '.ico', '.webp',
-                           '.eot', '.otf', '.ttf', '.woff', '.woff2',
-                           '.mp3', '.ogg', '.m4a', '.mid', '.midi', '.ra',
-                           '.mp4', '.webm', '.3gpp', '.3gp', '.ts', '.mpeg', '.mpg', '.mov', '.flv', '.m4v', '.mng', '.asx', '.asf', '.wmv', '.avi'])
-        self.clear_batch()
-        self.last_nginx_reload = 0
         self.botnet = set()
-        self.prefix = None
-
-    def run(self):
-        if self.mode == "daemon":
-            self.daemon_run()
-        elif self.mode == "top":
-            self.top_run()
-        elif self.mode == "ext":
-            self.ext_run()
-        elif self.mode == "bot":
-            self.bot_run()
-        elif self.mode == "errors":
-            self.errors_run()
-        elif self.mode == "size":
-            self.size_run()
-        elif self.mode == "size-top":
-            self.size_top_run()
-        elif self.mode == "tor":
-            self.tor_run()
-        elif self.mode == "tor-ban":
-            self.tor_ban_run()
-        elif self.mode == "bot-ban":
-            self.bot_ban_run()
-        else:
-            sys.exit("unknown mode %s" % self.mode)
+        pathlib.Path(AUTOFILTER_BOT_CONF_FILENAME).touch()
+        self.request_count_by_remote_addr = dict()
+        self.request_count_by_remote_addr_by_request_uri = dict()
+        self.country = dict()
+        self.last_nginx_reload = 0
 
     def check_exit(self):
         if self.exit:
@@ -185,108 +237,109 @@ class AutoFilter(object):
         signal.signal(signal.SIGINT, self.exit_gracefully)
         signal.signal(signal.SIGTERM, self.exit_gracefully)
 
-    def open_log(self):
-        if not os.path.isfile(self.log_filename):
-            sys.exit("log file '%s' not exists, can't run" % self.log_filename)
-        stat = os.stat(self.log_filename)
-        self.log_file = codecs.open(self.log_filename, 'rb', encoding='UTF-8')
-        self.inode = stat.st_ino
-
-    def send_nginx_signal(self, sig):
-        if os.path.exists(self.nginx_pid_filename):
-            with open(self.nginx_pid_filename) as pid_file:
-                pid = int(pid_file.readline())
-            if pid > 0:
-                os.kill(pid, sig)
+    def wait_log_file(self):
+        while not os.path.isfile(self.log_filename):
+            time.sleep(1)
 
     def reopen_log(self):
-        stat = os.stat(self.log_filename)
-        if stat.st_size > 4 * 1024 * 1024 * 1024:
-            os.rename(self.log_filename, self.old_log_filename)
-            with open(self.log_filename, 'ab'):
-                os.utime(self.log_filename, None)
-            uid = pwd.getpwnam("nginx").pw_uid
-            gid = grp.getgrnam("adm").gr_gid
-            os.chown(self.log_filename, uid, gid)
-            os.chmod(self.log_filename, 0640)
-            self.send_nginx_signal(signal.SIGUSR1)
-            time.sleep(1)
-        stat = os.stat(self.log_filename)
-        if self.inode != stat.st_ino:
-            if self.log_file:
-                self.log_file.close()
-            self.log_file = codecs.open(self.log_filename, 'rb', encoding='UTF-8')
-            self.inode = stat.st_ino
+        if self.log_file is None:  # open log
+            self.wait_log_file()
+            stat = os.stat(self.log_filename)
+            self.log_file = open(self.log_filename)
+            self.log_file_inode = stat.st_ino
+        else:  # reopen log
+            self.wait_log_file()
+            stat = os.stat(self.log_filename)
+            if self.log_file_inode != stat.st_ino:  # log file rotated
+                if self.log_file:
+                    self.log_file.close()
+                self.log_file = open(self.log_filename)
+                self.log_file_inode = stat.st_ino
 
-    def lines_once(self):
-        self.open_log()
-        while True:
+    def skip_old_log_file_records(self):
+        while not self.exit:
+            self.reopen_log()
             line = self.log_file.readline()
             self.check_exit()
             if line:
-                yield line
+                prefix = line[:16]
+                if self.prefix != prefix:
+                    self.prefix = prefix
+                    now = datetime.datetime.now()
+                    event = datetime.datetime.strptime(prefix.replace('T', ' '), "%Y-%m-%d %H:%M")
+                    delta = datetime.timedelta(minutes=2)
+                    if now - event > delta or event - now > delta:
+                        continue
+                    else:
+                        return
             else:
-                break
+                return
 
-    def lines_tail(self):
-        self.open_log()
+    def run(self):
+        # self.skip_old_log_file_records()
         while not self.exit:
-            count = 1024
-            while count > 0:
-                count = count - 1
-                line = self.log_file.readline()
-                self.check_exit()
-                if line:
-                    yield line
-                else:
-                    break
             self.reopen_log()
-            if count > 0:
+            line = self.log_file.readline()
+            self.check_exit()
+            if line:
+                prefix = line[:16]
+                if self.prefix != prefix:
+                    if self.prefix:
+                        self.process_batch(self.prefix.replace('T', ' '))
+                    self.prefix = prefix
+                self.process_line(line)
+            else:
                 time.sleep(1)
-        sys.exit(0)
 
     def process_line(self, line):
-        line = line.strip()
-        match = self.line_re.match(line)
-        if match:
-            country = match.group('country')
-            ip = match.group('ip')
-            request_uri = match.group('request_uri')
-            status = match.group('status')
-            request_method = match.group('request_method')
-            user_agent = match.group('user_agent')
+        time, geoip_country_code, remote_addr, upstream_cache_status, upstream_response_time, status, scheme, \
+            host, request_method, request_uri, body_bytes_sent, http_referer, http_user_agent = line.strip().split('\t')
+        static = upstream_cache_status == '-' and upstream_response_time == '-'
+        request_weight = 1.0 if not static else 0.1
+        request_uri = host + request_uri
 
-            pos = request_uri.find('?')
-            if pos == -1:
-                uri = request_uri.lower()
-                is_args = False
-            else:
-                uri = request_uri[:pos].lower()
-                is_args = True
+        self.country[remote_addr] = geoip_country_code
 
-            pos = uri.rfind('.')
-            if pos == -1:
-                ext = None
-            else:
-                ext = uri[pos:]
+        if remote_addr not in self.request_count_by_remote_addr:
+            self.request_count_by_remote_addr[remote_addr] = 0.0
+        self.request_count_by_remote_addr[remote_addr] += request_weight
 
-            if ext in self.static:
-                weight = 1
-            elif status.startswith('3'):
-                weight = 10
-            elif request_method == 'POST':
-                weight = 30
-            elif is_args:
-                weight = 20
-            else:
-                weight = 10
+        if remote_addr not in self.request_count_by_remote_addr_by_request_uri:
+            self.request_count_by_remote_addr_by_request_uri[remote_addr] = dict()
+        if request_uri not in self.request_count_by_remote_addr_by_request_uri[remote_addr]:
+            self.request_count_by_remote_addr_by_request_uri[remote_addr][request_uri] = 0.0
+        self.request_count_by_remote_addr_by_request_uri[remote_addr][request_uri] += request_weight
 
-            old_weight = self.load.get(ip, 0)
-            self.load[ip] = old_weight + weight
-            self.country[ip] = country
-            self.user_agent[ip] = user_agent
-        else:
-            print 'unmatched nginx access log line:', line
+    def process_batch(self, prefix):
+        bot = self.read_bot_conf()
+        bot = self.delete_expired_records(bot)
+
+        for remote_addr in self.request_count_by_remote_addr_by_request_uri:
+            if len(self.request_count_by_remote_addr_by_request_uri[remote_addr]) == 1:
+                for request_uri in self.request_count_by_remote_addr_by_request_uri[remote_addr]:
+                    request_count = int(self.request_count_by_remote_addr_by_request_uri[remote_addr][request_uri])
+                    country = self.country[remote_addr]
+                    if remote_addr not in bot and self.is_ip_blocked_by_one_uri_count(remote_addr, country, request_count):
+                        block_until = self.ip_block_until(remote_addr, country)
+                        bot[remote_addr] = block_until, country, request_count, f"ONE_URI_COUNT {request_uri}"
+                        logging.info(f"{prefix} bot detected: {country} {remote_addr:15s} {request_count:7} ONE_URI_COUNT {request_uri}")
+
+        for remote_addr in self.request_count_by_remote_addr:
+            request_count = int(self.request_count_by_remote_addr[remote_addr])
+            country = self.country[remote_addr]
+            if remote_addr not in bot:
+                blocked, domain = self.is_ip_blocked_by_request_count(remote_addr, country, request_count)
+                if blocked:
+                    block_until = self.ip_block_until(remote_addr, country)
+                    bot[remote_addr] = block_until, country, request_count, f"REQUEST_COUNT from {domain}"
+                    logging.info(f"{prefix} bot detected: {country} {remote_addr:15s} {request_count:7d} REQUEST_COUNT from {domain}")
+
+        self.write_bot_conf(bot)
+        self.reload_nginx_if_needed(bot)
+
+        self.request_count_by_remote_addr.clear()
+        self.request_count_by_remote_addr_by_request_uri.clear()
+        self.country.clear()
 
     def is_whitelisted_search_engine(self, domain):
         # https://support.google.com/webmasters/answer/80553?hl=en
@@ -301,47 +354,72 @@ class AutoFilter(object):
         else:
             return False
 
-    def get_ip_limit_by_cidr(self, ip):
-        for cidr in self.config.limit_cidr:
-            if netaddr.IPAddress(ip) in netaddr.IPNetwork(cidr):
-                return self.config.limit.get(cidr)
+    def get_ip_limit_request_count_by_cidr(self, ip):
+        for cidr in self.config.limit_request_count:
+            if '/' in cidr:
+                if netaddr.IPAddress(ip) in netaddr.IPNetwork(cidr):
+                    return self.config.limit_request_count.get(cidr)
         return None
 
-    def is_ip_blocked(self, ip, country, load):
-        limit = self.config.limit.get(ip)
+    def get_ip_limit_one_uri_count_by_cidr(self, ip):
+        for cidr in self.config.limit_one_uri_count:
+            if '/' in cidr:
+                if netaddr.IPAddress(ip) in netaddr.IPNetwork(cidr):
+                    return self.config.limit_one_uri_count.get(cidr)
+        return None
+
+    def get_block_by_cidr(self, ip):
+        for cidr in self.config.block:
+            if '/' in cidr:
+                if netaddr.IPAddress(ip) in netaddr.IPNetwork(cidr):
+                    return self.config.block.get(cidr)
+        return None
+
+    def is_ip_blocked_by_request_count(self, ip, country, request_count):
+        limit = self.config.limit_request_count.get(ip)
         if limit is None:
-            limit = self.get_ip_limit_by_cidr(ip)
+            limit = self.get_ip_limit_request_count_by_cidr(ip)
         if limit is None:
-            limit = self.config.limit.get(country)
+            limit = self.config.limit_request_count.get(country)
         if limit is None:
-            limit = self.config.limit['ALL']
-        if load > limit:
-            domain, err = self.resolver.ip_to_domain(ip)
+            limit = self.config.limit_request_count['ALL']
+        if request_count > limit:
+            domain = self.resolver.ip_to_domain(ip)
             if domain:
                 if self.is_whitelisted_search_engine(domain):
-                    return False, domain, err
+                    return False, None
                 else:
-                    return True, domain, err
+                    return True, domain
             else:
-                return True, domain, err
+                return True, 'UNKNOWN REVERSE DOMAIN NAME'
         else:
-            return False, None, None
+            return False, None
+
+    def is_ip_blocked_by_one_uri_count(self, ip, country, one_uri_count):
+        limit = self.config.limit_one_uri_count.get(ip)
+        if limit is None:
+            limit = self.get_ip_limit_one_uri_count_by_cidr(ip)
+        if limit is None:
+            limit = self.config.limit_one_uri_count.get(country)
+        if limit is None:
+            limit = self.config.limit_one_uri_count['ALL']
+        if one_uri_count > limit:
+            # search engines do not request one uri many times,
+            # so we skip test for search engines in this case.
+            return True
+        else:
+            return False
 
     def ip_block_until(self, ip, country):
         block = self.config.block.get(ip)
+        if block is None:
+            block = self.get_block_by_cidr(ip)
         if block is None:
             block = self.config.block.get(country)
         if block is None:
             block = self.config.block['ALL']
         now = time.time()
         return now + block
-
-    def clear_batch(self):
-        self.load = dict()
-        self.country = dict()
-        self.user_agent = dict()
-
-###############################################################################################################################################################
 
     def write_file(self, filename, content):
         tmp_filename = filename + '.tmp.' + uuid.uuid4().hex + '.tmp'
@@ -361,15 +439,15 @@ class AutoFilter(object):
             block_until = datetime.datetime.fromtimestamp(block_until)
             block_until = datetime.datetime(block_until.year, block_until.month, block_until.day, block_until.hour, block_until.minute, block_until.second)
             block_until = block_until.isoformat()
-            line = "%45s 1; # %s %10d %s %s" % (ip, country, load, block_until, text)
+            line = "%45s 1; #    %s    %7d    %s    %s" % (ip, country, load, block_until, text)
             out.append(line)
         content = "\n".join(out)
-        self.write_file(self.bot_conf_filename, content)
+        self.write_file(AUTOFILTER_BOT_CONF_FILENAME, content)
 
     def read_bot_conf(self):
         bot = dict()
-        if os.path.isfile(self.bot_conf_filename):
-            with open(self.bot_conf_filename) as bot_conf_file:
+        if os.path.isfile(AUTOFILTER_BOT_CONF_FILENAME):
+            with open(AUTOFILTER_BOT_CONF_FILENAME) as bot_conf_file:
                 for line in bot_conf_file:
                     line = line.strip()
                     if not line:
@@ -389,325 +467,49 @@ class AutoFilter(object):
                 del bot[ip]
         return bot
 
-    def reload_nginx(self, bot):
+    def send_nginx_signal(self, sig):
+        if os.path.isfile(NGINX_MASTER_PID_FILENAME):
+            with open(NGINX_MASTER_PID_FILENAME) as pid_file:
+                try:
+                    pid = int(pid_file.readline())
+                except Exception:
+                    pid = 0
+            if pid > 0:
+                os.kill(pid, sig)
+
+    def reload_nginx_if_needed(self, bot):
         now = time.time()
-        botnet = set(bot.keys())
-        if now - self.last_nginx_reload > self.nginx_reload_interval:
+        botnet = set(bot)
+        if now - self.last_nginx_reload >= NGINX_SERVICE_RELOAD_INTERVAL:
             if botnet != self.botnet:
                 self.send_nginx_signal(signal.SIGHUP)
                 self.last_nginx_reload = now
                 self.botnet = botnet
 
-    def daemon_process_batch(self):
-        bot = self.read_bot_conf()
-        bot = self.delete_expired_records(bot)
-        for ip, load in self.load.iteritems():
-            country = self.country[ip]
-            blocked, domain, err = self.is_ip_blocked(ip, country, load)
-            if blocked:
-                block_until = self.ip_block_until(ip, country)
-                user_agent = self.user_agent[ip]
-                if domain is None:
-                    text = "error: %s | %s" % (err, user_agent)
-                else:
-                    text = "%s | %s" % (domain, user_agent)
-                bot[ip] = block_until, country, load, text
-        self.write_bot_conf(bot)
-        self.reload_nginx(bot)
-        self.clear_batch()
 
-    def daemon_run(self):
-        if self.log_filename != '/var/log/nginx/access.log':
-            sys.exit("error: daemon mode can't be started with custom log '%s'" % self.log_filename)
-        self.prefix = None
-        self.botnet = set()
-        self.last_nginx_reload = 0
-        for line in self.lines_tail():
-            time_iso8601, dummy_rest_of_line = line.split('\t', 1)
-            prefix = time_iso8601[:16]
-            if self.prefix != prefix:
-                self.daemon_process_batch()
-                self.prefix = prefix
-            self.process_line(line)
+def configure_logging():
+    var_dir = os.path.dirname(AUTOFILTER_LOG_FILENAME)
+    if not os.path.isdir(var_dir):
+        os.mkdir(var_dir)
+    logfile = AUTOFILTER_LOG_FILENAME
+    root_logger = logging.getLogger("")
+    root_logger.setLevel(logging.DEBUG)
+    log_formatter = logging.Formatter('%(asctime)s %(levelname)-7s %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
+    log_handler = logging.handlers.RotatingFileHandler(logfile, maxBytes=1*1024*1024, backupCount=9)
+    log_handler.setFormatter(log_formatter)
+    root_logger.addHandler(log_handler)
 
-###############################################################################################################################################################
-
-    def top_process_batch(self):
-        for ip, load in self.load.iteritems():
-            top_load = self.top_load.get(ip, 0)
-            if load > top_load:
-                self.top_load[ip] = load
-                self.top_country[ip] = self.country[ip]
-                self.top_user_agent[ip] = self.user_agent[ip]
-                self.top_prefix[ip] = self.prefix
-        self.clear_batch()
-
-    def top_run(self):
-        self.prefix = None
-        self.top_load = dict()
-        self.top_country = dict()
-        self.top_prefix = dict()
-        self.top_user_agent = dict()
-        for line in self.lines_once():
-            self.check_exit()
-            time_iso8601, dummy_rest_of_line = line.split('\t', 1)
-            prefix = time_iso8601[:16]
-            if self.prefix != prefix:
-                self.top_process_batch()
-                self.prefix = prefix
-            self.process_line(line)
-        ips = self.top_load.keys()
-        ips.sort(reverse=True, key=lambda x: self.top_load[x])
-        for ip in ips:
-            self.check_exit()
-            load = self.top_load[ip]
-            country = self.top_country[ip]
-            user_agent = self.top_user_agent[ip]
-            blocked, domain, err = self.is_ip_blocked(ip, country, load)
-            if blocked:
-                status = "BLOCKED"
-                user_agent = " | %s" % user_agent
-            else:
-                status = "-------"
-                user_agent = ""
-            if domain:
-                text = domain
-            elif err:
-                text = "error: %s" % err
-            else:
-                text = ""
-            if blocked or load > self.config.limit['ALL']:
-                print "%s %8d %s %15s %s %s%s" % (self.top_prefix[ip], self.top_load[ip], self.top_country[ip], ip, status, text, user_agent)
-
-###############################################################################################################################################################
-
-    def ext_run(self):
-        ext_info = dict()
-        for line in self.lines_once():
-            line = line.strip()
-            match = self.line_re.match(line)
-            if match:
-                scheme = match.group('scheme')
-                host = match.group('host')
-                request_uri = match.group('request_uri')
-                status = match.group('status')
-                request_method = match.group('request_method')
-                body_bytes_sent = match.group('body_bytes_sent')
-                referer = match.group('referer')
-                pos = request_uri.find('?')
-                if pos == -1:
-                    uri = request_uri.lower()
-                else:
-                    uri = request_uri[:pos].lower()
-                pos = uri.rfind('.')
-                if pos == -1:
-                    ext = None
-                else:
-                    ext = uri[pos:]
-                if ext is None or ext in self.static or uri.endswith('/') or ext in ['.php', '.ua', '.com', '.net', '.org', '.html', '.htm']:
-                    continue
-                else:
-                    info = ext_info.get(ext)
-                    if info is None:
-                        count = 1
-                    else:
-                        count = info[0] + 1
-                    ext_info[ext] = count, status, request_method, scheme, host, request_uri, body_bytes_sent, referer
-            else:
-                print 'unmatched nginx access log line:', line
-        keys = ext_info.keys()
-        keys.sort(reverse=True, key=lambda x: ext_info[x][0])
-        for ext in keys:
-            count, status, request_method, scheme, host, request_uri, body_bytes_sent, referer = ext_info[ext]
-            print "%s (%d)" % (ext, count)
-            print status, request_method, scheme + '://' + host + request_uri, body_bytes_sent
-            print referer
-            print
-
-###############################################################################################################################################################
-
-    def bot_run(self):
-        content = None
-        if os.path.isfile(self.bot_conf_filename):
-            with open(self.bot_conf_filename) as bot_conf_file:
-                content = bot_conf_file.read()
-        if content:
-            print content
-
-###############################################################################################################################################################
-
-    def tor_run(self):
-        out = list()
-        response = urllib2.urlopen('https://check.torproject.org/cgi-bin/TorBulkExitList.py?ip=1.1.1.1')
-        lines = response.read().split("\n")
-        for line in lines:
-            comment_start = line.find('#')
-            if comment_start > -1:
-                line = line[:comment_start]
-            line = line.strip()
-            if not line:
-                continue
-            line = " %15s 1;" % line
-            out.append(line)
-        self.write_file("/opt/autofilter/var/tor.conf", "\n".join(out))
-        self.send_nginx_signal(signal.SIGHUP)
-
-###############################################################################################################################################################
-
-    def tor_ban_run(self):
-        out = list()
-        response = urllib2.urlopen('https://check.torproject.org/cgi-bin/TorBulkExitList.py?ip=1.1.1.1')
-        lines = response.read().split("\n")
-        for line in lines:
-            comment_start = line.find('#')
-            if comment_start > -1:
-                line = line[:comment_start]
-            line = line.strip()
-            if not line:
-                continue
-            ip = line
-            subprocess.call([ "ipset", "add", "ddos", ip, "-exist"])
-
-###############################################################################################################################################################
-
-    def bot_ban_run(self):
-        bot = self.read_bot_conf()
-        for ip in bot:
-            subprocess.call([ "ipset", "add", "ddos", ip, "-exist"])
-
-###############################################################################################################################################################
-
-    def errors_run(self):
-        for line in self.lines_once():
-            line = line.strip()
-            match = self.line_re.match(line)
-            if match:
-                status = match.group('status')
-                if status.startswith("5"):
-                    print line
-            else:
-                print 'unmatched nginx access log line:', line
-
-###############################################################################################################################################################
-
-    def round_up(self, num_to_round, multiple):
-        if multiple == 0:
-            return num_to_round
-        remainder = num_to_round % multiple
-        if remainder == 0:
-            return num_to_round
-        return num_to_round + multiple - remainder
-
-    def size_run(self):
-        count = dict()
-        for line in self.lines_once():
-            line = line.strip()
-            match = self.line_re.match(line)
-            if match:
-                request_uri = match.group('request_uri')
-                status = match.group('status')
-                body_bytes_sent = match.group('body_bytes_sent')
-                pos = request_uri.find('?')
-                if pos == -1:
-                    uri = request_uri.lower()
-                else:
-                    uri = request_uri[:pos].lower()
-                pos = uri.rfind('.')
-                if pos == -1:
-                    ext = None
-                else:
-                    ext = uri[pos:]
-                if ext in self.static or not status.startswith('2') or body_bytes_sent == "0":
-                    continue
-                size = self.round_up(int(body_bytes_sent), 4096)
-                count[size] = count.get(size, 0) + 1
-            else:
-                print 'unmatched nginx access log line:', line
-        if count:
-            total = 0
-            for size in count:
-                total = total + count[size]
-            for size in sorted(count):
-                percent = (count[size] / float(total)) * 100
-                print "size %7dk: %7.2f%% %9d %s" % (size / 1024, percent, count[size], '*' * int(percent))
-
-    def clean_top(self, count):
-        keys = self.top.keys()
-        keys.sort(reverse=True)
-        keys = keys[0:count]
-        new_top = dict()
-        for key in keys:
-            new_top[key] = self.top[key]
-        self.top = new_top
-        self.top_count = count
-
-    def size_top_run(self):
-        self.top = dict()
-        self.top_count = 0
-        for line in self.lines_once():
-            line = line.strip()
-            match = self.line_re.match(line)
-            if match:
-                request_method = match.group('request_method')
-                scheme = match.group('scheme')
-                host = match.group('host')
-                request_uri = match.group('request_uri')
-                status = match.group('status')
-                body_bytes_sent = match.group('body_bytes_sent')
-                pos = request_uri.find('?')
-                if pos == -1:
-                    uri = request_uri.lower()
-                else:
-                    uri = request_uri[:pos].lower()
-                pos = uri.rfind('.')
-                if pos == -1:
-                    ext = None
-                else:
-                    ext = uri[pos:]
-                if ext in self.static or not status.startswith('2') or body_bytes_sent == "0":
-                    continue
-                size = self.round_up(int(body_bytes_sent), 4096)
-                key2 = request_method, scheme, host, request_uri
-                size_dict = self.top.get(size, dict())
-                count = size_dict.get(key2, 0)
-                size_dict[key2] = count + 1
-                self.top[size] = size_dict
-                self.top_count = self.top_count + 1
-                if self.top_count > 5000:
-                    self.clean_top(500)
-            else:
-                print 'unmatched nginx access log line:', line
-        if self.top:
-            self.clean_top(500)
-            keys = self.top.keys()
-            keys.sort(reverse=True)
-            for key in keys:
-                keys2 = self.top[key].keys()
-                keys2.sort(key=lambda x: self.top[key][x], reverse=True)
-                lines = 0
-                for key2 in keys2:
-                    size = key
-                    request_method, scheme, host, request_uri = key2
-                    count = self.top[key][key2]
-                    print "size: %10d    count: %7d    request: %4s %s://%s%s" % (size, count, request_method, scheme, host, request_uri)
-                    lines += 1
-                    if lines > 20:
-                        break
-                print
-
-###############################################################################################################################################################
+    logger = logging.getLogger('config')
+    stream_handler = logging.StreamHandler()
+    logger.addHandler(stream_handler)
 
 
 def main():
-    try:
-        parser = argparse.ArgumentParser(prog="autofilter")
-        parser.add_argument("--log", required=False, metavar="LOG", dest="log", default="/var/log/nginx/access.log", help="use log file (/var/log/nginx/access.log)")
-        parser.add_argument("mode", choices=["daemon", "top", "ext", "bot", "errors", "size", "size-top", "tor", "tor-ban", "bot-ban"], help="mode")
-        args = parser.parse_args()
-        AutoFilter(args).run()
-    except IOError:  # [Errno 32] Broken pipe
-        pass
-    sys.exit(0)
+    configure_logging()
+    if not Config.read_config_file().valid:
+        sys.exit(1)
+    else:
+        AutoFilter().run()
 
 
 if __name__ == '__main__':
