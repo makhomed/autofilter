@@ -1,5 +1,16 @@
 #!/usr/bin/python3 -u
 
+
+""" Automatically mitigate layer 7 DDoS attacks.
+"""
+
+__author__ = "Gena Makhomed"
+__contact__ = "https://github.com/makhomed/autofilter"
+__license__ = "GNU General Public License version 3"
+__version__ = "2.0.0"
+
+
+import argparse
 import datetime
 import logging
 import logging.handlers
@@ -16,22 +27,18 @@ import dns.resolver
 import dns.reversename
 import netaddr
 
-__author__ = "Gena Makhomed"
-__contact__ = "https://github.com/makhomed/autofilter"
-__license__ = "GNU General Public License version 3"
-__version__ = "2.0.0"
 
 DEFAULT_REMOTE_ADDR_REQUEST_COUNT_THRESHOLD = 128
 DEFAULT_REMOTE_ADDR_ONE_URI_COUNT_THRESHOLD = 32
 DEFAULT_REMOTE_ADDR_BLOCK_PERIOD_IN_SECONDS = 24 * 60 * 60
 
+AUTOFILTER_BOT_CONF_FILENAME = '/opt/autofilter/var/bot.conf'
 AUTOFILTER_CONFIG_FILENAME = '/opt/autofilter/autofilter.conf'
 AUTOFILTER_LOG_FILENAME = '/opt/autofilter/var/autofilter.log'
-AUTOFILTER_BOT_CONF_FILENAME = '/opt/autofilter/var/bot.conf'
 
+NGINX_SERVICE_RELOAD_INTERVAL = 60
 NGINX_MASTER_PID_FILENAME = '/var/run/nginx.pid'
 NGINX_ACCESS_LOG_FILENAME = '/var/log/nginx/access.log'
-NGINX_SERVICE_RELOAD_INTERVAL = 60
 
 
 class Config:
@@ -75,10 +82,17 @@ class Config:
                 continue
             line = line.replace('\t', '\x20')
             line = line.lower()
-            name, value = line.split(None, 1)
-
+            try:
+                name, value = line.split(None, 1)
+            except ValueError as error:
+                logger.error(f"invalid config: invalid line '{line}': {error}")
+                return config
             if name == 'limit':
-                entity, limit_request_count, limit_one_uri_count = value.split(None, 2)
+                try:
+                    entity, limit_request_count, limit_one_uri_count = value.split(None, 2)
+                except ValueError as error:
+                    logger.error(f"invalid config: invalid limit directive '{line}': {error}")
+                    return config
                 if ':' not in entity:
                     entity = entity.upper()
                 if entity in config.limit_request_count:
@@ -211,7 +225,8 @@ class Resolver:
 
 
 class AutoFilter:
-    def __init__(self):
+    def __init__(self, args):
+        self.args = args
         self.config = Config.get_config()
         self.resolver = Resolver()
         self.log_filename = NGINX_ACCESS_LOG_FILENAME
@@ -220,11 +235,11 @@ class AutoFilter:
         self.prefix = None
         self.exit = False
         self.set_signal_handler()
-        self.botnet = set()
         pathlib.Path(AUTOFILTER_BOT_CONF_FILENAME).touch()
         self.request_count_by_remote_addr = dict()
         self.request_count_by_remote_addr_by_request_uri = dict()
         self.country = dict()
+        self.botnet = set()
         self.last_nginx_reload = 0
 
     def check_exit(self):
@@ -312,6 +327,11 @@ class AutoFilter:
         self.request_count_by_remote_addr_by_request_uri[remote_addr][request_uri] += request_weight
 
     def process_batch(self, prefix):
+        if not self.args.dry_run:
+            logger = logging.getLogger("")
+        else:
+            logger = logging.getLogger("config")
+
         bot = self.read_bot_conf()
         bot = self.delete_expired_records(bot)
 
@@ -320,10 +340,12 @@ class AutoFilter:
                 for request_uri in self.request_count_by_remote_addr_by_request_uri[remote_addr]:
                     request_count = int(self.request_count_by_remote_addr_by_request_uri[remote_addr][request_uri])
                     country = self.country[remote_addr]
-                    if remote_addr not in bot and self.is_ip_blocked_by_one_uri_count(remote_addr, country, request_count):
-                        block_until = self.ip_block_until(remote_addr, country)
-                        bot[remote_addr] = block_until, country, request_count, f"ONE_URI_COUNT {request_uri}"
-                        logging.info(f"{prefix} bot detected: {country} {remote_addr:15s} {request_count:7} ONE_URI_COUNT {request_uri}")
+                    if remote_addr not in bot:
+                        blocked, domain = self.is_ip_blocked_by_one_uri_count(remote_addr, country, request_count)
+                        if blocked:
+                            block_until = self.ip_block_until(remote_addr, country)
+                            bot[remote_addr] = block_until, country, request_count, f"ONE_URI_COUNT from {domain} request_uri: {request_uri}"
+                            logger.info(f"{prefix} bot detected: {country} {remote_addr:15s} {request_count:7} ONE_URI_COUNT from {domain} request_uri: {request_uri}")
 
         for remote_addr in self.request_count_by_remote_addr:
             request_count = int(self.request_count_by_remote_addr[remote_addr])
@@ -333,10 +355,11 @@ class AutoFilter:
                 if blocked:
                     block_until = self.ip_block_until(remote_addr, country)
                     bot[remote_addr] = block_until, country, request_count, f"REQUEST_COUNT from {domain}"
-                    logging.info(f"{prefix} bot detected: {country} {remote_addr:15s} {request_count:7d} REQUEST_COUNT from {domain}")
+                    logger.info(f"{prefix} bot detected: {country} {remote_addr:15s} {request_count:7d} REQUEST_COUNT from {domain}")
 
-        self.write_bot_conf(bot)
-        self.reload_nginx_if_needed(bot)
+        if not self.args.dry_run:
+            self.write_bot_conf(bot)
+            self.reload_nginx_if_needed(bot)
 
         self.request_count_by_remote_addr.clear()
         self.request_count_by_remote_addr_by_request_uri.clear()
@@ -408,11 +431,16 @@ class AutoFilter:
         if limit is None:
             limit = self.config.limit_one_uri_count['ALL']
         if one_uri_count > limit:
-            # search engines do not request one uri many times,
-            # so we skip test for search engines in this case.
-            return True
+            domain = self.resolver.ip_to_domain(ip)
+            if domain:
+                if self.is_whitelisted_search_engine(domain):
+                    return False, None
+                else:
+                    return True, domain
+            else:
+                return True, 'UNKNOWN REVERSE DOMAIN NAME'
         else:
-            return False
+            return False, None
 
     def ip_block_until(self, ip, country):
         block = self.config.block.get(ip)
@@ -502,7 +530,6 @@ def configure_logging():
     log_handler = logging.handlers.RotatingFileHandler(logfile, maxBytes=1*1024*1024, backupCount=9)
     log_handler.setFormatter(log_formatter)
     root_logger.addHandler(log_handler)
-
     logger = logging.getLogger('config')
     stream_handler = logging.StreamHandler()
     logger.addHandler(stream_handler)
@@ -510,10 +537,23 @@ def configure_logging():
 
 def main():
     configure_logging()
-    if not Config.read_config_file().valid:
-        sys.exit(1)
+    parser = argparse.ArgumentParser(prog="autofilter", description="Automatically mitigate layer 7 DDoS attacks.", add_help=False)
+    group = parser.add_mutually_exclusive_group()
+    group.add_argument("-h", "--help", action="help", help="show this help message and exit")
+    group.add_argument("-n", "--dry-run", action="store_true", dest="dry_run", help="print bot info instead of block")
+    group.add_argument("-t", "--test-config", action="store_true", dest="test_config", help="test configuraton file and exit")
+    group.add_argument("-v", "--version", action='version', version=f"%(prog)s {__version__}", help="show program's version and exit")
+    args = parser.parse_args()
+    if Config.read_config_file().valid:
+        if args.test_config:
+            print(f"autofilter: the configuration file {AUTOFILTER_CONFIG_FILENAME} syntax is ok")
+            print(f"autofilter: configuration file {AUTOFILTER_CONFIG_FILENAME} test is successful")
+            sys.exit(0)
+        else:
+            AutoFilter(args).run()
     else:
-        AutoFilter().run()
+        print(f"autofilter: configuration file {AUTOFILTER_CONFIG_FILENAME} test failed")
+        sys.exit(1)
 
 
 if __name__ == '__main__':
