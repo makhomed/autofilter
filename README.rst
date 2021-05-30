@@ -185,7 +185,8 @@ nginx configuration in context server for standalone and nginx frontend servers:
 
 | **Warning!!!** If this line not included in server context - server will be unprotected from DDoS.
 
-| **Warning!!!** If nginx ``log_format`` changed - you need to rotate nginx access.log file.
+
+| **Warning!!!** If nginx ``log_format`` changed - you need to rotate nginx access.log file before starting autofilter.
 
 
 Automation via systemd service
