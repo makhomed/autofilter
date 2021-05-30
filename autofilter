@@ -349,8 +349,8 @@ class AutoFilter:
                         blocked, domain = self.is_ip_blocked_by_one_uri_count(remote_addr, country, request_count)
                         if blocked:
                             block_until = self.ip_block_until(remote_addr, country)
-                            bot[remote_addr] = block_until, country, request_count, f"ONE_URI_COUNT from {domain} request_uri: {request_uri}"
-                            logger.info(f"{prefix} bot detected: {country} {remote_addr:15s} {request_count:7} ONE_URI_COUNT from {domain} request_uri: {request_uri}")
+                            bot[remote_addr] = block_until, country, request_count, f"ONE_URI_COUNT from {domain}"
+                            logger.info(f"{prefix} bot detected: {country} {remote_addr:15s} {request_count:7} ONE_URI_COUNT from {domain}")
 
         for remote_addr in self.request_count_by_remote_addr:
             request_count = int(self.request_count_by_remote_addr[remote_addr])
