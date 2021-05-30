@@ -1,5 +1,5 @@
-autofilter (verson 2.0)
-=======================
+autofilter (version 2.0)
+========================
 
 Automatically mitigate layer 7 DDoS attacks.
 
