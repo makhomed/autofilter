@@ -308,8 +308,13 @@ class AutoFilter:
                 time.sleep(1)
 
     def process_line(self, line):
-        time, geoip_country_code, remote_addr, upstream_cache_status, upstream_response_time, status, scheme, \
-            host, request_method, request_uri, body_bytes_sent, http_referer, http_user_agent = line.strip().split('\t')
+        try:
+            time, geoip_country_code, remote_addr, upstream_cache_status, upstream_response_time, status, scheme, \
+                host, request_method, request_uri, body_bytes_sent, http_referer, http_user_agent = line.strip().split('\t')
+        except ValueError as error:
+            logger = logging.getLogger("")
+            logger.error(f"BAD LINE: '{line}'")
+            return
         static = upstream_cache_status == '-' and upstream_response_time == '-'
         request_weight = 1.0 if not static else 0.1
         request_uri = host + request_uri
