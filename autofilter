@@ -313,7 +313,7 @@ class AutoFilter:
                 host, request_method, request_uri, body_bytes_sent, http_referer, http_user_agent = line.strip().split('\t')
         except ValueError as error:
             logger = logging.getLogger("")
-            logger.error(f"BAD LINE: '{line}'")
+            logger.error(f"BAD LINE: '{line}': {error}")
             return
         static = upstream_cache_status == '-' and upstream_response_time == '-'
         request_weight = 1.0 if not static else 0.1
