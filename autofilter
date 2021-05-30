@@ -278,6 +278,7 @@ class AutoFilter:
             line = self.log_file.readline()
             self.check_exit()
             if line:
+                line = line.rstrip('\n')
                 prefix = line[:16]
                 if self.prefix != prefix:
                     self.prefix = prefix
@@ -298,6 +299,7 @@ class AutoFilter:
             line = self.log_file.readline()
             self.check_exit()
             if line:
+                line = line.rstrip('\n')
                 prefix = line[:16]
                 if self.prefix != prefix:
                     if self.prefix:
@@ -310,7 +312,7 @@ class AutoFilter:
     def process_line(self, line):
         try:
             time, geoip_country_code, remote_addr, upstream_cache_status, upstream_response_time, status, scheme, \
-                host, request_method, request_uri, body_bytes_sent, http_referer, http_user_agent = line.strip().split('\t')
+                host, request_method, request_uri, body_bytes_sent, http_referer, http_user_agent = line.split('\t')
         except ValueError as error:
             logger = logging.getLogger("")
             logger.error(f"BAD LINE: '{line}': {error}")
