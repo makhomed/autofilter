@@ -500,7 +500,8 @@ class AutoFilter:
 
     def delete_expired_records(self, bot):
         now = time.time()
-        for ip in bot.keys():
+        bot_keys = list(bot.keys())
+        for ip in bot_keys:
             block_until, dummy_country, dummy_load, dummy_text = bot[ip]
             if block_until < now:
                 del bot[ip]
