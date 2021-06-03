@@ -3,6 +3,9 @@ autofilter (version 2.0)
 
 Automatically mitigate layer 7 DDoS attacks.
 
+Automatically mitigate layer 7 DDoS attacks by adding abusive IPs to nginx blacklist. IP considered as belonging to bot when passed a threshold of requests per minute.
+Custom thresholds can be set for every country code, CIDR subnet or single IP. Different request weight counted for requests to static and requests to dynamic content.
+
 Installation
 ------------
 
