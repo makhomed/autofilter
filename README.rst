@@ -62,7 +62,7 @@ Also ``<entity>`` can be IP address, ipv4 or ipv6 or IP network in CIDR notation
 Each threshold is integer number or special value ``none``.
 
 Request count measured as one-minute sum of request weight for each request from each ip.
-One request to static resource or one nginx-level redirect measured as weight 0.1,
+One request to static resource or one nginx-level redirect measured as weight 0.01,
 all other requests considered as requests to backend, and has weight 1.0.
 
 If some specific ip generates load above threshold - this ip will be blocked as bot.

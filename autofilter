@@ -318,7 +318,7 @@ class AutoFilter:
             logger.error(f"BAD LINE: '{line}': {error}")
             return
         static = upstream_cache_status == '-' and upstream_response_time == '-'
-        request_weight = 1.0 if not static else 0.1
+        request_weight = 1.0 if not static else 0.01
         request_uri = host + request_uri
 
         self.country[remote_addr] = geoip_country_code
